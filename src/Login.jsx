@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import {Input, Card, Button} from '@mui/material';
+import { Input, Card, Button, Grid, Typography, Container } from '@mui/material';
 import { CardContent, CardHeader } from '@mui/material';
 
 export default function Login() {
@@ -13,15 +13,49 @@ export default function Login() {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <Card className="w-full max-w-md p-6 shadow-lg">
-        <CardHeader>
-          "Login"
-        </CardHeader>
+    <Container
+      sx={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        backgroundColor: 'grey.100',
+      }}
+    >
+      <Card
+        sx={{
+          maxWidth: 450,
+          width: '100%',
+          padding: 3,
+          borderRadius: 3,
+          boxShadow: 24,
+          backgroundColor: 'background.paper',
+        }}
+      >
+        <CardHeader
+          title="Login"
+          sx={{
+            textAlign: 'center',
+            marginBottom: 3,
+            fontSize: '1.5rem',
+            fontWeight: 500,
+            color: 'text.primary',
+          }}
+        />
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
-              <label htmlFor="email" className="block text-sm font-medium">Email</label>
+              <label
+                htmlFor="email"
+                style={{
+                  marginBottom: '8px',
+                  fontSize: '1rem',
+                  fontWeight: 'bold',
+                  color: 'text.secondary',
+                }}
+              >
+                Email
+              </label>
               <Input
                 id="email"
                 type="email"
@@ -29,10 +63,31 @@ export default function Login() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="Enter your email"
                 required
+                fullWidth
+                sx={{
+                  padding: 1.5,
+                  borderRadius: 2,
+                  border: '1px solid',
+                  borderColor: 'grey.300',
+                  transition: 'border-color 0.3s ease-in-out',
+                  '&:focus': {
+                    borderColor: 'primary.main',
+                  },
+                }}
               />
             </div>
             <div>
-              <label htmlFor="password" className="block text-sm font-medium">Password</label>
+              <label
+                htmlFor="password"
+                style={{
+                  marginBottom: '8px',
+                  fontSize: '1rem',
+                  fontWeight: 'bold',
+                  color: 'text.secondary',
+                }}
+              >
+                Password
+              </label>
               <Input
                 id="password"
                 type="password"
@@ -40,12 +95,40 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter your password"
                 required
+                fullWidth
+                sx={{
+                  padding: 1.5,
+                  borderRadius: 2,
+                  border: '1px solid',
+                  borderColor: 'grey.300',
+                  transition: 'border-color 0.3s ease-in-out',
+                  '&:focus': {
+                    borderColor: 'primary.main',
+                  },
+                }}
               />
             </div>
-            <Button type="submit" className="w-full">Login</Button>
+            <Button
+              type="submit"
+              fullWidth
+              sx={{
+                marginTop: 2,
+                padding: 1.5,
+                backgroundColor: 'primary.main',
+                color: '#fff',
+                borderRadius: 2,
+                '&:hover': {
+                  backgroundColor: 'primary.dark',
+                  transform: 'scale(1.05)',
+                  transition: 'transform 0.3s ease-in-out',
+                },
+              }}
+            >
+              Login
+            </Button>
           </form>
         </CardContent>
       </Card>
-    </div>
+    </Container>
   );
 }
