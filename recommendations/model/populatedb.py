@@ -21,7 +21,7 @@ def populate_database(client: MongoClient, adding_data=True) -> None:
     # import data into mongo
     if adding_data:
         # Import photos data
-        photos_df = pd.read_json("/Users/michaelosmolovskiy/github/binge/recommendations/data/cleaned_photos.json", lines=True)
+        photos_df = pd.read_json("../data/cleaned_photos.json", lines=True)
         photos_collection = client.binge.photos
         restaurants_collection = client.binge.restaurants
         if not photos_df.empty:
@@ -30,7 +30,7 @@ def populate_database(client: MongoClient, adding_data=True) -> None:
 
         # import restaurants data if file exists:
         try:
-            restaurants_df = pd.read_json("/Users/michaelosmolovskiy/github/binge/recommendations/data/cleaned_restaurants.json", lines=True)
+            restaurants_df = pd.read_json("../data/cleaned_restaurants.json", lines=True)
             if not restaurants_df.empty:
                 restaurants_collection.insert_many(restaurants_df.to_dict("records"))
                 print(f"Inserted {len(restaurants_df)} restaurant documents.")
