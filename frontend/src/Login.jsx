@@ -1,6 +1,52 @@
 import { useState } from 'react';
-import { Input, Card, Button, Grid, Typography, Container } from '@mui/material';
-import { CardContent, CardHeader } from '@mui/material';
+import { Container, Card, CardContent, CardHeader, TextField, Button } from '@mui/material';
+import { keyframes } from '@emotion/react';
+
+// Gradient background animation
+const gradientAnimation = keyframes`
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+`;
+
+// Fade-in animation for the card
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+// Wave animation keyframes
+const waveAnimation = keyframes`
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+`;
+
+// Wave component for animated background
+const Wave = () => (
+  <div style={{
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    width: '100%', // Container stays full width
+    height: '150px',
+    overflow: 'hidden',
+    zIndex: 1,
+  }}>
+    <svg viewBox="0 0 1200 120" preserveAspectRatio="none"
+         style={{
+           width: '200%', // Increased width for smooth animation
+           height: '100%',
+           animation: `${waveAnimation} 10s linear infinite`,
+         }}>
+      <path d="M0,0 C300,60 900,-60 1200,0 L1200,120 L0,120 Z" fill="rgba(255,255,255,0.7)" />
+    </svg>
+  </div>
+);
+
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -15,112 +61,85 @@ export default function Login() {
   return (
     <Container
       sx={{
+        position: 'relative', // positioning context for absolute elements
+        minHeight: '100vh',
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        height: '100vh',
-        backgroundColor: 'grey.100',
+        background: 'linear-gradient(45deg, #e0f7fa, #80deea, #b2dfdb, #26a69a)',
+        backgroundSize: '400% 400%',
+        animation: `${gradientAnimation} 15s ease infinite`,
+        padding: 2,
+        overflow: 'hidden',
       }}
     >
+      {/* Animated wave background */}
+      <Wave />
+
+      {/* Login Card */}
       <Card
         sx={{
-          maxWidth: 450,
-          width: '100%',
+          position: 'relative',
+          zIndex: 2, // ensures the card appears above the wave
+          width: { xs: '90%', sm: 400 },
           padding: 3,
-          borderRadius: 3,
-          boxShadow: 24,
-          backgroundColor: 'background.paper',
+          borderRadius: 4,
+          boxShadow: '0px 4px 20px rgba(0, 0, 0, 0.1)',
+          animation: `${fadeIn} 1s ease-out`,
         }}
       >
         <CardHeader
           title="Login"
           sx={{
             textAlign: 'center',
-            marginBottom: 3,
-            fontSize: '1.5rem',
-            fontWeight: 500,
-            color: 'text.primary',
+            '& .MuiCardHeader-title': {
+              fontSize: '1.8rem',
+              fontWeight: 600,
+              color: '#333',
+            },
           }}
         />
         <CardContent>
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div>
-              <label
-                htmlFor="email"
-                style={{
-                  marginBottom: '8px',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  color: 'text.secondary',
-                }}
-              >
-                Email
-              </label>
-              <Input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Enter your email"
-                required
-                fullWidth
-                sx={{
-                  padding: 1.5,
-                  borderRadius: 2,
-                  border: '1px solid',
-                  borderColor: 'grey.300',
-                  transition: 'border-color 0.3s ease-in-out',
-                  '&:focus': {
-                    borderColor: 'primary.main',
-                  },
-                }}
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="password"
-                style={{
-                  marginBottom: '8px',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
-                  color: 'text.secondary',
-                }}
-              >
-                Password
-              </label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                required
-                fullWidth
-                sx={{
-                  padding: 1.5,
-                  borderRadius: 2,
-                  border: '1px solid',
-                  borderColor: 'grey.300',
-                  transition: 'border-color 0.3s ease-in-out',
-                  '&:focus': {
-                    borderColor: 'primary.main',
-                  },
-                }}
-              />
-            </div>
+          <form 
+            onSubmit={handleSubmit} 
+            style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}
+          >
+            <TextField
+              label="Email"
+              variant="outlined"
+              fullWidth
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: '8px',
+                },
+              }}
+            />
+            <TextField
+              label="Password"
+              type="password"
+              variant="outlined"
+              fullWidth
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: '8px',
+                },
+              }}
+            />
             <Button
               type="submit"
+              variant="contained"
               fullWidth
               sx={{
-                marginTop: 2,
-                padding: 1.5,
-                backgroundColor: 'primary.main',
-                color: '#fff',
-                borderRadius: 2,
+                padding: '12px',
+                borderRadius: '8px',
+                fontWeight: 600,
+                backgroundColor: '#1976d2',
                 '&:hover': {
-                  backgroundColor: 'primary.dark',
-                  transform: 'scale(1.05)',
-                  transition: 'transform 0.3s ease-in-out',
+                  backgroundColor: '#115293',
                 },
               }}
             >
