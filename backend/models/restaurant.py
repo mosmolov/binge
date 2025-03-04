@@ -1,5 +1,6 @@
 from beanie import Document
-
+from pydantic import BaseModel
+from typing import Optional, List
 class Restaurant(Document):
     _id: str
     business_id: str
@@ -11,3 +12,6 @@ class Restaurant(Document):
     latitude: float
     longitude: float
     stars: float
+    
+    class Settings:
+        name = "restaurants"

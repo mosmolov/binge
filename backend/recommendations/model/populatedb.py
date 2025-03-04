@@ -125,8 +125,8 @@ def upload_images(max_workers=10):
     # Configuration       
     cloudinary.config( 
         cloud_name = "diub0blpa", 
-        api_key = "212739855472564", 
-        api_secret = "wASPoB1Bs743ELLWmyhZpO0BP8g",
+        api_key = os.getenv("CLOUDINARY_API_KEY"), 
+        api_secret = os.getenv("CLOUDINARY_API_SECRET"),
         secure=True
     )
 

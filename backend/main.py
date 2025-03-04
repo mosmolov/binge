@@ -1,32 +1,37 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
 from contextlib import asynccontextmanager
-from logging import info
-from beanie import init_beanie
-from backend.routers import photos
-from backend.models import photo
+import uvicorn
 
-CONNECTION_STRING = os.getenv("MONGO_URI")
-DATABASE_NAME = os.getenv("DATABASE_NAME", "default_database_name")  # Replace with your default database name
-
+from backend.database import init_db
+from backend.routers.photos import router as photos_router
+from backend.routers.restaurants import router as restaurants_router
 @asynccontextmanager
-async def db_lifespan(app: FastAPI):
-    # Startup
-    app.mongodb_client = AsyncIOMotorClient(CONNECTION_STRING)
-    app.database = app.mongodb_client[DATABASE_NAME]
-    await init_beanie(database=app.database, document_models=[photo.Photo])
-    ping_response = await app.database.command("ping")
-    if int(ping_response["ok"]) != 1:
-        raise Exception("Problem connecting to database cluster.")
-    else:
-        info("Connected to database cluster.")
-    
-    yield
-    # Shutdown
-    app.mongodb_client.close()
+async def get_db(app: FastAPI):
+    # Call init_db() without unpacking
+    db = await init_db()
+    try:
+        yield db
+    finally:
+        pass
 
-app = FastAPI(lifespan=db_lifespan)
+app = FastAPI(title="Binge API", lifespan=get_db)
 
-app.include_router(photos.router)
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+app.include_router(photos_router)
+app.include_router(restaurants_router)
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to Binge API"}
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
