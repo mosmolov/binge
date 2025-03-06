@@ -13,7 +13,16 @@ async def get_photos():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/photos/{photo_id}", response_model=Photo)
+@router.get("/random", response_model=List[Photo], tags=["photos"])
+async def get_random_photos(limit: int = 20):
+    try:
+        pipeline = [{"$sample": {"size": limit}}]
+        random_photos = await Photo.aggregate(pipeline).to_list()
+        return random_photos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{photo_id}", response_model=Photo)
 async def get_photo(photo_id: str):
     try:
         photo = await Photo.get(photo_id)
@@ -22,8 +31,14 @@ async def get_photo(photo_id: str):
         return photo
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/photos", response_model=Photo, status_code=status.HTTP_201_CREATED)
+@router.get("/{business_id}", response_model=List[Photo])
+async def get_business_photos(business_id: str):
+    try:
+        photos = await Photo.find_all({"business_id": business_id}).to_list()
+        return photos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@router.post("/", response_model=Photo, status_code=status.HTTP_201_CREATED)
 async def create_photo(photo: Photo):
     try:
         await photo.create()
@@ -31,7 +46,7 @@ async def create_photo(photo: Photo):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/photos/{photo_id}", response_model=Photo)
+@router.put("/{photo_id}", response_model=Photo)
 async def update_photo(photo_id: str, photo_data: Photo):
     try:
         photo = await Photo.get(photo_id)
@@ -48,7 +63,7 @@ async def update_photo(photo_id: str, photo_data: Photo):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_photo(photo_id: str):
     try:
         photo = await Photo.get(photo_id)

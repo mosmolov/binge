@@ -6,6 +6,7 @@ import uvicorn
 from backend.database import init_db
 from backend.routers.photos import router as photos_router
 from backend.routers.restaurants import router as restaurants_router
+from backend.routers.images import router as images_router
 @asynccontextmanager
 async def get_db(app: FastAPI):
     # Call init_db() without unpacking
@@ -28,7 +29,7 @@ app.add_middleware(
 
 app.include_router(photos_router)
 app.include_router(restaurants_router)
-
+app.include_router(images_router)
 @app.get("/")
 async def root():
     return {"message": "Welcome to Binge API"}

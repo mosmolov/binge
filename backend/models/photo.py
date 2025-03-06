@@ -8,6 +8,6 @@ class Photo(Document):
     business_id: str
     caption: Optional[str]
     label: Optional[str]
-    
     class Settings:
         name = "photos"  # Collection name in MongoDB
+        
