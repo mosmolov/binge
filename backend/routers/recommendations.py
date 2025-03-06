@@ -1,12 +1,11 @@
 from fastapi import APIRouter, HTTPException, status
 from typing import List, Optional
 from pydantic import BaseModel
-import os
-import sys
+from datetime import datetime
 from backend.models.restaurant import Restaurant
 from backend.routers.restaurants import get_restaurant_by_id
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from recommendations.model.recommendation_model import load_model
+from backend.models.recommendations import RecommendationRequest, HealthResponse
+from backend.recommendations.model.recommendation_model import RestaurantRecommender
 
 # Define request and response models
 class RecommendationRequest(BaseModel):
@@ -21,7 +20,8 @@ router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
 # Load the recommendation model
 try:
-    recommendation_model = load_model()
+    recommendation_model = RestaurantRecommender(data_path="../data/cleaned_restaurants.csv")
+    recommendation_model.load_model()
 except Exception as e:
     print(f"Error loading recommendation model: {e}")
     recommendation_model = None
@@ -54,15 +54,19 @@ async def get_recommendations(request: RecommendationRequest):
             detail=f"Error generating recommendations: {str(e)}"
         )
 
-@router.get("/health", status_code=status.HTTP_200_OK)
+@router.get("/health", response_model=HealthResponse)
 async def health_check():
-    """
-    Check if the recommendation model is loaded and available.
-    """
+    """Health check endpoint providing system status."""
     if recommendation_model is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Recommendation model is not available"
-        )
-    return {"status": "ok", "model_loaded": True}
-
+        raise HTTPException(status_code=503, detail="Recommendation system not initialized")
+    
+    return HealthResponse(
+        status="healthy",
+        version="1.0.0",
+        model_info={
+            "restaurants_count": len(recommendation_model.df),
+            "content_weight": recommendation_model.content_weight,
+            "rating_weight": recommendation_model.rating_weight
+        },
+        timestamp=datetime.now().isoformat()
+    )

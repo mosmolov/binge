@@ -6,3 +6,4 @@ cleaned_photos.json
 cleaned_restaurants.csv
 cleaned_restaurants.json
 photos.json
+recommender_model.pkl
