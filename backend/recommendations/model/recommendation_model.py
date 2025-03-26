@@ -34,6 +34,29 @@ class RestaurantRecommender:
         if missing_columns:
             raise ValueError(f"Data missing required columns: {missing_columns}")
         
+        # Check for NaN values in the dataframe
+        nan_count = self.df.isna().sum().sum()
+        if nan_count > 0:
+            logger.warning(f"Found {nan_count} NaN values in the dataset. Handling them...")
+            
+            # Fill NaN values in required columns
+            for col in required_columns:
+                if self.df[col].isna().any():
+                    if col in ['latitude', 'longitude']:
+                        # For geographic coordinates, we could drop rows with missing values
+                        # as they're critical for recommendations
+                        self.df = self.df.dropna(subset=[col])
+                        logger.info(f"Dropped rows with NaN values in {col}")
+                    elif col == 'stars':
+                        # For stars, we could fill with the mean value
+                        mean_stars = self.df[col].mean()
+                        self.df[col] = self.df[col].fillna(mean_stars)
+                        logger.info(f"Filled NaN values in {col} with mean: {mean_stars}")
+                    else:
+                        # For other columns, fill with 0
+                        self.df[col] = self.df[col].fillna(0)
+                        logger.info(f"Filled NaN values in {col} with 0")
+        
         # Extract and prepare feature sets
         self._extract_features()
         
@@ -71,7 +94,19 @@ class RestaurantRecommender:
             logger.warning("No content features found in the dataset")
             self.content_features = np.zeros((len(self.df), 1))
         else:
-            self.content_features = self.df[content_columns].values
+            # Handle NaN values in content features
+            content_data = self.df[content_columns].copy()
+            nan_count_before = content_data.isna().sum().sum()
+            if nan_count_before > 0:
+                logger.warning(f"Found {nan_count_before} NaN values in content features. Filling with 0...")
+                content_data = content_data.fillna(0)
+            
+            self.content_features = content_data.values
+            
+        # Verify no NaN values in any features
+        if np.isnan(self.geo_features).any() or np.isnan(self.rating_features).any() or np.isnan(self.content_features).any():
+            logger.error("NaN values found in features after processing")
+            raise ValueError("Input contains NaN values even after cleaning")
 
     def _build_similarity_matrix(self):
         """Build the content-based similarity matrix using cosine similarity."""
