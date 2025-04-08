@@ -3,12 +3,10 @@ from pydantic import BaseModel
 from typing import Optional, List
 class Restaurant(Document):
     _id: str
-    business_id: str
+    # string or int
+    business_id: str | int
     name: str
     address: str
-    city: str
-    state: str
-    postal_code: str
     latitude: float
     longitude: float
     stars: float

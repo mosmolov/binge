@@ -1,41 +1,60 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import TinderCard from "react-tinder-card";
 import {Button} from "@mui/material"
 
-const images = [
-  "/vite.svg",
-  "/foodtest.jpeg",
-];
-
+const images_dir = "../assets/images/";
 export default function SwipeImageUI() {
-  const [index, setIndex] = useState(0);
+  const [images, setImages] = useState([]);
+  const [currIndex, setCurrIndex] = useState(0);
   
-  const getRandomIndex = () => {
-    let newIndex;
-    do {
-      newIndex = Math.floor(Math.random() * images.length);
-    } while (newIndex === index);
-    return newIndex;
-  };
-
+  const retrieveRandomImages = async (num_images=10) => {
+    const images = [];
+    for (let i = 1; i <= num_images; i++) {
+      //pick random files from directory
+      // import.meta.env.VITE_API_URL + "/restaurants/random_ids"
+      const random_ids = await fetch("http://localhost:8000/restaurants/random_ids", {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }).then((response) => response.json())
+      .then((data) => {
+        console.log(data);
+        return data;
+      }
+      );
+      // add images to array
+      for (let j = 0; j < random_ids.length; j++) {
+        images.push({
+          id: j,
+          url: `${images_dir}${random_ids[j]}.jpg`,
+        });
+      }
+    }
+    return images;
+  }
   const handleSwipe = (direction) => {
-    console.log(`Swiped ${direction} on image ${index}`);
-    setIndex(getRandomIndex());
+    console.log(`Swiped ${direction} on image ${currIndex}`);
+    setCurrIndex((prevIndex) => (prevIndex + 1) % images.length);
   };
-
+  useEffect (() => {
+    retrieveRandomImages(10).then((data) => {
+      setImages(data);
+    });
+  }, []);
   return (
     <div className="flex flex-col items-center justify-center h-screen">
     <h1 className="text-3xl font-bold mb-6">Welcome to Binge</h1>
       <div className="relative w-96 h-96 flex items-center justify-center">
         <TinderCard
-          key={images[index]}
+          key={currIndex}
           onSwipe={(dir) => handleSwipe(dir)}
           preventSwipe={['up', 'down']}
           className="absolute w-full h-full"
         >
           <div
   style={{
-    backgroundImage: `url(${images[index]})`,
+    backgroundImage: `url(${images[currIndex]?.url})`,
     backgroundSize: "cover",
     backgroundPosition: "center",
     height: "500px", // Adjust height

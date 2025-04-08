@@ -3,12 +3,6 @@ from pymongo.server_api import ServerApi
 import pandas as pd
 import os
 from dotenv import load_dotenv
-import cloudinary
-import cloudinary.uploader
-import cloudinary.api
-from cloudinary.utils import cloudinary_url
-import concurrent.futures
-import time
 from tqdm import tqdm
 
 load_dotenv()
@@ -30,15 +24,19 @@ def populate_database(client: MongoClient, adding_data=True) -> None:
     # import data into mongo
     if adding_data:
         # Import photos data
-        photos_df = pd.read_json("backend/recommendations/data/cleaned_photos.json", lines=True)
-        
-        if not photos_df.empty:
-            photos_collection.insert_many(photos_df.to_dict("records"))
-            print(f"Inserted {len(photos_df)} photo documents.")
-
-        # import restaurants data if file exists:
+        # try:
+        #     base_dir = os.path.dirname(os.path.abspath(__file__))
+        #     photos_path = os.path.join(base_dir, "../data/cleaned_photos.json")
+        #     photos_json = pd.read_json(photos_path, lines=True)
+        #     if not photos_json.empty:
+        #         photos_collection.insert_many(photos_json.to_dict("records"))
+        #         print(f"Inserted {len(photos_json)} photo documents.")
+        # except Exception as ex:
+        #     print("No photo data imported:", ex)
         try:
-            restaurants_df = pd.read_json("backend/recommendations/data/cleaned_restaurants.json", lines=True)
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            restaurants_path = os.path.join(base_dir, "../data/cleaned_restaurants.json")
+            restaurants_df = pd.read_json(restaurants_path, lines=True)
             if not restaurants_df.empty:
                 restaurants_collection.insert_many(restaurants_df.to_dict("records"))
                 print(f"Inserted {len(restaurants_df)} restaurant documents.")
@@ -52,5 +50,4 @@ def populate_database(client: MongoClient, adding_data=True) -> None:
 if __name__ == "__main__":
     client = connect_to_mongo(uri)
     populate_database(client, adding_data=True)
-    # upload_images(max_workers=10)  # You can adjust the number of workers as needed
     client.close()
