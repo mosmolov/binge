@@ -21,7 +21,7 @@ class RestaurantRecommender:
     def __init__(self, 
                  data_path: str = "recommendations/data/cleaned_restaurants.csv", 
                  embedding_model_name: str = 'all-MiniLM-L6-v2',
-                 n_components: int = 50):
+                 n_components: int = 1):
         """
         Initialize the recommendation system with restaurant data.
         
