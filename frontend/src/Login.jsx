@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Container, Card, CardContent, CardHeader, TextField, Button } from '@mui/material';
 import { keyframes } from '@emotion/react';
+import { useAuth } from './context/AuthContext';
+import { useNavigate, Link } from 'react-router-dom';
 
 // Gradient background animation
 const gradientAnimation = keyframes`
@@ -49,13 +51,20 @@ const Wave = () => (
 
 
 export default function Login() {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const { login } = useAuth();
+  const navigate = useNavigate();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log('Login attempt with:', { email, password });
-    // Add authentication logic here
+    try {
+      await login(username, password);
+      navigate('/');
+    } catch (err) {
+      console.error('Login failed', err);
+      // handle error UI
+    }
   };
 
   return (
@@ -105,11 +114,11 @@ export default function Login() {
             style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}
           >
             <TextField
-              label="Email"
+              label="Username"
               variant="outlined"
               fullWidth
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               sx={{
                 '& .MuiOutlinedInput-root': {
                   borderRadius: '8px',
@@ -145,6 +154,9 @@ export default function Login() {
             >
               Login
             </Button>
+            <p style={{ marginTop: '1rem', textAlign: 'center' }}>
+              Don&apos;t have an account? <Link to="/register">Register</Link>
+            </p>
           </form>
         </CardContent>
       </Card>

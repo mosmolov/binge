@@ -2,12 +2,14 @@ from fastapi import APIRouter, HTTPException, status, Depends, Query
 from typing import List, Optional, Dict, Any, Tuple, Annotated
 from pydantic import BaseModel, Field, confloat  # confloat requires 'pip install pydantic[email]'
 from datetime import datetime
+from beanie import PydanticObjectId
 
 try:
     from backend.models.restaurant import Restaurant
     from backend.routers.restaurants import get_restaurant_by_id
     from backend.models.recommendations import HealthResponse
-    from backend.recommendations.model.recommendation_model import RestaurantRecommender 
+    from backend.recommendations.model.recommendation_model import RestaurantRecommender
+    from backend.models.user import User
 except ImportError as e:
     print(f"Error importing backend modules: {e}")
     print("Please ensure the script is run from the correct directory or PYTHONPATH is set.")
@@ -113,6 +115,7 @@ def get_recommendation_model():
 @router.post("/", response_model=RecommendationResponse)
 async def get_recommendations(
     request: RecommendationRequest,
+    user_id: Optional[PydanticObjectId] = Query(None, description="Optional user ID to include saved preferences"),
     model: RestaurantRecommender = Depends(get_recommendation_model)
 ):
     """
@@ -122,10 +125,19 @@ async def get_recommendations(
     """
     try:
         user_location = (request.user_latitude, request.user_longitude)
-        
+        # merge saved user preferences if user_id provided
+        liked_ids = request.liked_ids.copy()
+        disliked_ids = request.disliked_ids.copy()
+        if user_id:
+            user = await User.get(user_id)
+            if not user:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            # combine and dedupe
+            liked_ids = list({*user.liked_business_ids, *liked_ids})
+            disliked_ids = list({*user.disliked_business_ids, *disliked_ids})
         recommendations_raw, actual_radius = model.recommend_restaurants(
-            liked_ids=request.liked_ids,
-            disliked_ids=request.disliked_ids,
+            liked_ids=liked_ids,
+            disliked_ids=disliked_ids,
             user_location=user_location,
             radius_miles=request.radius_miles,
             top_n=request.top_n

@@ -9,6 +9,7 @@ from backend.routers.photos import router as photos_router
 from backend.routers.restaurants import router as restaurants_router
 from backend.routers.images import router as images_router
 from backend.routers.recommendations import router as recommendations_router, get_recommendation_model
+from backend.routers.auth import router as auth_router
 from backend.recommendations.model.recommendation_model import RestaurantRecommender 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,6 +56,7 @@ app.include_router(photos_router)
 app.include_router(restaurants_router)
 app.include_router(images_router)
 app.include_router(recommendations_router) # This router now manages its model dependency
+app.include_router(auth_router)
 
 @app.get("/", tags=["Root"])
 async def root():
