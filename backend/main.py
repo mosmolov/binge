@@ -10,7 +10,7 @@ from backend.routers.restaurants import router as restaurants_router
 from backend.routers.images import router as images_router
 from backend.routers.recommendations import router as recommendations_router, get_recommendation_model
 from backend.routers.auth import router as auth_router
-from backend.recommendations.model.recommendation_model import RestaurantRecommender 
+from backend.routers.users import router as users_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Perform database initialization if needed on startup
@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 
     print("Application ready.")
     yield
-    # Cleanup logic can go here if needed (e.g., closing DB connections)
+    
     print("Application shutdown.")
 
 app = FastAPI(
@@ -36,16 +36,13 @@ app = FastAPI(
 )
     
 # Configure CORS
-# Be more specific in production environments instead of allowing all origins "*"
 origins = [
     "http://localhost",
-    "http://localhost:3000", # Example: Allow frontend dev server
-    # Add your frontend production URL here
+    "http://localhost:3000", 
 ]
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=origins, # Use specific origins in production
-    allow_origins=["*"],  # Keep as wildcard for now if needed, but be aware of security implications
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
     allow_headers=["*"],  # Allows all headers
@@ -55,8 +52,9 @@ app.add_middleware(
 app.include_router(photos_router)
 app.include_router(restaurants_router)
 app.include_router(images_router)
-app.include_router(recommendations_router) # This router now manages its model dependency
+app.include_router(recommendations_router)
 app.include_router(auth_router)
+app.include_router(users_router)
 
 @app.get("/", tags=["Root"])
 async def root():

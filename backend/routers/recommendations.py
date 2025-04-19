@@ -1,86 +1,18 @@
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from typing import List, Optional, Dict, Any, Tuple, Annotated
-from pydantic import BaseModel, Field, confloat  # confloat requires 'pip install pydantic[email]'
+from pydantic import BaseModel, Field, confloat
 from datetime import datetime
 from beanie import PydanticObjectId
-
-try:
-    from backend.models.restaurant import Restaurant
-    from backend.routers.restaurants import get_restaurant_by_id
-    from backend.models.recommendations import HealthResponse
-    from backend.recommendations.model.recommendation_model import RestaurantRecommender
-    from backend.models.user import User
-except ImportError as e:
-    print(f"Error importing backend modules: {e}")
-    print("Please ensure the script is run from the correct directory or PYTHONPATH is set.")
-    # Define dummy classes/functions for syntactical validity
-    class Restaurant(BaseModel):
-        id: str
-        name: str
-
-    async def get_restaurant_by_id(id: str): 
-        return Restaurant(id=id, name=f"Dummy Restaurant {id}")
-
-    class HealthResponse(BaseModel):
-        status: str
-        version: str
-        model_info: Dict
-        timestamp: str
-
-    import pandas as pd
-    import numpy as np
-    class RestaurantRecommender:
-        def __init__(self, data_path="dummy.csv", embedding_model_name='all-MiniLM-L6-v2'):
-            self.df = pd.DataFrame({'business_id': []})
-            self.content_weight = 1.0
-            self.rating_weight = 1.0
-        def recommend_restaurants(self, liked_ids, disliked_ids, user_location, radius_miles, top_n):
-            return [], 10.0
-        def set_weights(self, content_weight, rating_weight):
-            self.content_weight = content_weight
-            self.rating_weight = rating_weight
-        @property
-        def business_ids(self): 
-            return []
-        @property
-        def sim_matrix(self): 
-            return np.array([])
-        @property
-        def rating_features(self): 
-            return np.array([])
-
 import numpy as np
 import pandas as pd
+from backend.models.restaurant import Restaurant
+from backend.routers.restaurants import get_restaurant_by_id
+from backend.models.recommendations import HealthResponse, RecommendationDetail, RecommendationRequest, RecommendationResponse, RecommendationScore, WeightsRequest
+from backend.recommendations.model.recommendation_model import RestaurantRecommender
+from backend.models.user import User
 
 # Define request and response models
 
-class RecommendationRequest(BaseModel):
-    liked_ids: List[str] = Field(..., description="List of business IDs that the user likes")
-    disliked_ids: List[str] = Field(default=[], description="List of business IDs that the user dislikes")
-    user_latitude: Annotated[float, Field(..., description="User's current latitude", ge=-90, le=90)]
-    user_longitude: Annotated[float, Field(..., description="User's current longitude", ge=-180, le=180)]
-    radius_miles: Optional[float] = Field(default=10.0, ge=0, description="Maximum distance in miles to search")
-    top_n: int = Field(default=5, ge=1, description="Number of recommendations to return")
-
-class RecommendationScore(BaseModel):
-    content_score: float  # Similarity based on attribute name embeddings
-    rating_score: float
-    proximity_score: float
-    final_score: float
-    distance_miles: float
-
-class RecommendationDetail(BaseModel):
-    restaurant: Restaurant
-    scores: RecommendationScore
-
-class RecommendationResponse(BaseModel):
-    recommendations: List[RecommendationDetail]
-    actual_radius: float
-    timestamp: str
-
-class WeightsRequest(BaseModel):
-    content_weight: Optional[float] = Field(default=None, ge=0, description="Weight for attribute embedding similarity")
-    rating_weight: Optional[float] = Field(default=None, ge=0, description="Weight for rating similarity")
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 

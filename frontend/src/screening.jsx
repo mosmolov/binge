@@ -1,6 +1,19 @@
 import { useState, useEffect } from "react";
 import TinderCard from "react-tinder-card";
-import { Button } from "@mui/material";
+import { Button, AppBar, Toolbar, Typography, IconButton, Box, Fade } from "@mui/material";
+import { keyframes } from '@emotion/react';
+import ThumbUpAltIcon from '@mui/icons-material/ThumbUpAlt';
+import ThumbDownAltIcon from '@mui/icons-material/ThumbDownAlt';
+import RestaurantMenuIcon from '@mui/icons-material/RestaurantMenu';
+import { useAuth } from './context/AuthContext';
+import { useNavigate } from 'react-router-dom';
+
+// Gradient and fade animations
+const fullScreenGradient = keyframes`
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+`;
 
 export default function SwipeImageUI() {
   const [images, setImages] = useState([]);
@@ -8,10 +21,12 @@ export default function SwipeImageUI() {
   const [likedIds, setLikedIds] = useState([]);
   const [dislikedIds, setDislikedIds] = useState([]);
   const [imageError, setImageError] = useState(false);
-  const [recommendations, setRecommendations] = useState(null);
   const [userLatitude, setUserLatitude] = useState(37.7749); // Default to San Francisco
   const [userLongitude, setUserLongitude] = useState(-122.4194);
   const [locationStatus, setLocationStatus] = useState(null);
+
+  const { logout, user } = useAuth();
+  const navigate = useNavigate();
 
   // Retrieve images from the backend
   const retrieveRandomImages = async () => {
@@ -36,27 +51,29 @@ export default function SwipeImageUI() {
     console.log(imagesArray);
     return imagesArray;
   };
-    // Get user's current location
-    const getCurrentLocation = () => {
-      setLocationStatus("Fetching your location...");
-      
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            setUserLatitude(position.coords.latitude);
-            setUserLongitude(position.coords.longitude);
-            setLocationStatus(`Location updated! (${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)})`);
-            setTimeout(() => setLocationStatus(null), 3000);
-          },
-          (error) => {
-            console.error("Error getting location:", error);
-            setLocationStatus("Unable to get location. Please check permissions.");
-          }
-        );
-      } else {
-        setLocationStatus("Geolocation is not supported by your browser.");
-      }
-    };
+
+  // Get user's current location
+  const getCurrentLocation = () => {
+    setLocationStatus("Fetching your location...");
+    
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLatitude(position.coords.latitude);
+          setUserLongitude(position.coords.longitude);
+          setLocationStatus(`Location updated! (${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)})`);
+          setTimeout(() => setLocationStatus(null), 3000);
+        },
+        (error) => {
+          console.error("Error getting location:", error);
+          setLocationStatus("Unable to get location. Please check permissions.");
+        }
+      );
+    } else {
+      setLocationStatus("Geolocation is not supported by your browser.");
+    }
+  };
+
   // Send the recommendations request
   const fetchRecommendations = async () => {
     const requestBody = {
@@ -81,40 +98,81 @@ export default function SwipeImageUI() {
       }
       const data = await response.json();
       console.log("Recommendations data:", data);
-      setRecommendations(data.recommendations); // Access the recommendations array
+      // Instead of setting state, navigate to recommendations page
+      navigate('/recommendations', { state: { recommendations: data.recommendations } });
     } catch (error) {
       console.error("Error fetching recommendations:", error);
     }
   };
-
+  
   // Handle swipe event (also used by the extra buttons)
   const handleSwipe = async (direction) => {
+    if (!user || !user.id) {
+      console.error("User not logged in, cannot record swipe.");
+      return; 
+    }
+    
+    if (currIndex >= images.length) {
+        console.log("No more images to swipe.");
+        return;
+    }
+
     console.log(`Swiped ${direction} on image ${currIndex}`);
     setImageError(false); // Reset error state for the next image
 
-    // Fetch the business ID for the current image
-    const businessId = await fetch(`http://localhost:8000/photos/business/${images[currIndex].photo_id.toString()}`)
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error("Failed to fetch business ID");
-        }
-        return response.json();
-      })
-      .then((data) => data)
-      .catch((error) => console.error("Error fetching business ID:", error));
-
-    // Register the swipe action
-    if (direction === "right") {
-      setLikedIds((prev) => [...prev, businessId]);
-    } else if (direction === "left") {
-      setDislikedIds((prev) => [...prev, businessId]);
+    const currentImage = images[currIndex];
+    if (!currentImage || !currentImage.photo_id) {
+        console.error("Current image data is missing.");
+        return;
     }
 
-    // If swiping on the last image, fetch recommendations automatically
-    if (currIndex === images.length - 1) {
-      fetchRecommendations();
-    } else {
-      setCurrIndex((prevIndex) => prevIndex + 1);
+    try {
+        // Fetch the business ID for the current image
+        const businessIdResponse = await fetch(`http://localhost:8000/photos/business/${currentImage.photo_id.toString()}`);
+        if (!businessIdResponse.ok) {
+            throw new Error(`Failed to fetch business ID: ${businessIdResponse.statusText}`);
+        }
+        const businessId = await businessIdResponse.json();
+
+        if (!businessId) {
+            throw new Error("Business ID not found for the photo.");
+        }
+
+        // Determine the API endpoint based on swipe direction
+        const endpoint = direction === "right" ? "likes" : "dislikes";
+        const apiUrl = `http://localhost:8000/users/${user.id}/${endpoint}?business_id=${encodeURIComponent(businessId)}`;
+
+        // Persist the swipe to the backend
+        const updateResponse = await fetch(apiUrl, {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+            },
+        });
+
+        if (!updateResponse.ok) {
+            const errorData = await updateResponse.json();
+            throw new Error(`Failed to update user ${endpoint}: ${errorData.detail || updateResponse.statusText}`);
+        }
+
+        console.log(`Successfully updated user ${endpoint} for business ${businessId}`);
+
+        // Update local state
+        if (direction === "right") {
+            setLikedIds((prev) => [...prev, businessId]);
+        } else if (direction === "left") {
+            setDislikedIds((prev) => [...prev, businessId]);
+        }
+
+        // Move to the next card or fetch recommendations
+        if (currIndex === images.length - 1) {
+            fetchRecommendations();
+        } else {
+            setCurrIndex((prevIndex) => prevIndex + 1);
+        }
+
+    } catch (error) {
+        console.error("Error handling swipe:", error);
     }
   };
 
@@ -129,112 +187,131 @@ export default function SwipeImageUI() {
     setImageError(false);
   }, [currIndex]);
 
-  // If recommendations data is available, display the recommendations view automatically
-  if (recommendations) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen p-4">
-        <h1 className="text-3xl font-bold mb-6">Restaurant Recommendations</h1>
-        {recommendations.map((rec, index) => (
-          <div key={index} className="w-full max-w-md p-4 mb-4 border rounded-lg shadow-md">
-            <h2 className="text-xl font-bold mb-2">{rec.restaurant.name}</h2>
-            <p>Stars: {rec.restaurant.stars}</p>
-            <p className="mt-2 text-sm text-gray-600">Location: {rec.restaurant.address}</p>
-          </div>
-        ))}
-        <Button
-          className="mt-6 px-6 py-2 bg-blue-500 text-white rounded-lg shadow-md hover:bg-blue-600 transition-all"
-          onClick={() => {
-            // Reset state to start a new session
-            setRecommendations(null);
-            setCurrIndex(0);
-            setLikedIds([]);
-            setDislikedIds([]);
-            retrieveRandomImages().then((data) => {
-              setImages(data);
-            });
-          }}
-        >
-          Start New Session
-        </Button>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex flex-col items-center justify-center h-screen">
-      <h1 className="text-3xl font-bold mb-6">Welcome to Binge</h1>
-      <div className="mb-4 flex flex-col items-center">
-        <Button 
-          variant="outlined"
-          onClick={getCurrentLocation}
-          startIcon={<span role="img" aria-label="location">📍</span>}
-          size="small"
-        >
-          Use My Location
-        </Button>
-        {locationStatus && (
-          <p className="text-sm mt-1 text-blue-600">{locationStatus}</p>
-        )}
-      </div>
-      <div className="relative w-96 h-96 flex items-center justify-center">
-        {images.length > 0 && currIndex < images.length && (
-          <TinderCard
-            key={currIndex}
-            onSwipe={(dir) => handleSwipe(dir)}
-            preventSwipe={["up", "down"]}
-            className="absolute w-full h-full"
-          >
-            <div
-              style={{
-                backgroundImage: !imageError ? `url(/photos/${images[currIndex]?.url})` : "none",
-                backgroundColor: imageError ? "#f0f0f0" : "transparent",
-                backgroundSize: "cover",
-                backgroundPosition: "center",
-                height: "500px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: imageError ? "#333" : "white",
-                fontSize: "24px",
-                fontWeight: "bold",
-              }}
-            >
-              {imageError && (
-                <div className="text-center p-4">
-                  <p>Image could not be loaded</p>
-                  <p className="text-sm mt-2">Please try swiping to the next image</p>
-                </div>
+    <Box
+      sx={{
+        minHeight: '100vh',
+        width: '100vw',
+        background: 'linear-gradient(120deg, #f8b500, #fceabb, #f8b500, #f76d1a)',
+        backgroundSize: '400% 400%',
+        animation: `${fullScreenGradient} 15s ease infinite`,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <AppBar position="static" color="transparent" elevation={0} sx={{ background: 'rgba(255,255,255,0.85)' }}>
+        <Toolbar>
+          <RestaurantMenuIcon sx={{ mr: 1, color: '#f76d1a' }} />
+          <Typography variant="h5" sx={{ flexGrow: 1, fontWeight: 700, color: '#333' }}>Binge</Typography>
+          <IconButton edge="end" color="inherit" onClick={() => { logout && logout(); navigate('/login'); }}>
+          </IconButton>
+        </Toolbar>
+      </AppBar>
+      <Fade in={true} timeout={800}>
+        <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
+          <Box sx={{ width: { xs: '95vw', sm: 420, md: 500 }, maxWidth: 500, height: { xs: 500, sm: 600 }, position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <Box sx={{ mb: 2, textAlign: 'center' }}>
+              <Button
+                variant="outlined"
+                onClick={getCurrentLocation}
+                startIcon={<span role="img" aria-label="location">📍</span>}
+                size="small"
+                sx={{ borderRadius: 3, fontWeight: 600 }}
+              >
+                Use My Location
+              </Button>
+              {locationStatus && (
+                <Typography variant="body2" color="#1976d2" sx={{ mt: 1 }}>{locationStatus}</Typography>
               )}
-              {/* Hidden image element to catch loading errors */}
-              {images[currIndex]?.url && (
-                <img
-                  src={`/photos/${images[currIndex]?.url}`}
-                  alt=""
-                  style={{ display: "none" }}
-                  onError={() => setImageError(true)}
-                />
+            </Box>
+            <Box sx={{ position: 'relative', width: '100%', height: { xs: 400, sm: 500 }, mb: 2 }}>
+              {images.length > 0 && currIndex < images.length && (
+                <TinderCard
+                  key={currIndex}
+                  onSwipe={(dir) => handleSwipe(dir)}
+                  preventSwipe={["up", "down"]}
+                  className="absolute w-full h-full"
+                >
+                  <Box
+                    sx={{
+                      backgroundImage: !imageError ? `url(/photos/${images[currIndex]?.url})` : "none",
+                      backgroundColor: imageError ? "#f0f0f0" : "rgba(0,0,0,0.2)",
+                      backgroundSize: "cover",
+                      backgroundPosition: "center",
+                      borderRadius: 6,
+                      boxShadow: 8,
+                      width: '100%',
+                      height: { xs: 400, sm: 500 },
+                      display: 'flex',
+                      alignItems: 'flex-end',
+                      justifyContent: 'center',
+                      color: imageError ? "#333" : "#fff",
+                      position: 'relative',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {/* Overlay info bar */}
+                    {!imageError && (
+                      <Box sx={{
+                        width: '100%',
+                        background: 'rgba(0,0,0,0.45)',
+                        p: 2,
+                        borderBottomLeftRadius: 24,
+                        borderBottomRightRadius: 24,
+                        position: 'absolute',
+                        bottom: 0,
+                        left: 0,
+                      }}>
+                        <Typography variant="h6" fontWeight={700} sx={{ color: '#fff' }}>
+                          Food #{images[currIndex]?.photo_id}
+                        </Typography>
+                        {/* Optionally add more info here */}
+                      </Box>
+                    )}
+                    {imageError && (
+                      <Box sx={{ textAlign: 'center', p: 4 }}>
+                        <Typography variant="h6">Image could not be loaded</Typography>
+                        <Typography variant="body2" sx={{ mt: 2 }}>Please try swiping to the next image</Typography>
+                      </Box>
+                    )}
+                    {/* Hidden image element to catch loading errors */}
+                    {images[currIndex]?.url && (
+                      <img
+                        src={`/photos/${images[currIndex]?.url}`}
+                        alt="food"
+                        style={{ display: "none" }}
+                        onError={() => setImageError(true)}
+                      />
+                    )}
+                  </Box>
+                </TinderCard>
               )}
-            </div>
-          </TinderCard>
-        )}
-      </div>
-      {/* Extra buttons for manual swipe registration */}
-      <div className="flex gap-4 mt-4">
-        <Button
-          variant="contained"
-          color="error"
-          onClick={() => handleSwipe("left")}
-        >
-          Dislike
-        </Button>
-        <Button
-          variant="contained"
-          color="success"
-          onClick={() => handleSwipe("right")}
-        >
-          Like
-        </Button>
-      </div>
-    </div>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 3, width: '100%' }}>
+              <Button
+                variant="contained"
+                color="error"
+                fullWidth
+                onClick={() => handleSwipe('left')}
+                sx={{ borderRadius: 3, fontWeight: 700, fontSize: 18, py: 1.5, background: 'linear-gradient(90deg,#ff5858,#f09819)' }}
+                startIcon={<ThumbDownAltIcon />}
+              >
+                Dislike
+              </Button>
+              <Button
+                variant="contained"
+                color="success"
+                fullWidth
+                onClick={() => handleSwipe('right')}
+                sx={{ borderRadius: 3, fontWeight: 700, fontSize: 18, py: 1.5, background: 'linear-gradient(90deg,#43cea2,#185a9d)' }}
+                startIcon={<ThumbUpAltIcon />}
+              >
+                Like
+              </Button>
+            </Box>
+          </Box>
+        </Box>
+      </Fade>
+    </Box>
   );
 }
