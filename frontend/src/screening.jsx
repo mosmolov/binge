@@ -14,6 +14,7 @@ import {
   Paper,
   Container,
   Stack,
+  Slider,
 } from "@mui/material";
 import { keyframes } from "@emotion/react";
 import ThumbUpAltIcon from "@mui/icons-material/ThumbUpAlt";
@@ -43,6 +44,7 @@ export default function SwipeImageUI() {
   const [locationStatus, setLocationStatus] = useState("Click button to get location");
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
   const [locationAcquired, setLocationAcquired] = useState(false); // Track if location is acquired
+  const [radius, setRadius] = useState(10); // Recommendation radius in miles
 
   const { logout, user } = useAuth();
   const navigate = useNavigate();
@@ -181,7 +183,7 @@ export default function SwipeImageUI() {
         disliked_ids: disliked_ids,
         user_latitude: parseFloat(userLatitude),
         user_longitude: parseFloat(userLongitude),
-        radius_miles: 10.0, // Example radius
+        radius_miles: radius, // Use selected recommendation radius
         top_n: 5, // Example count
       };
 
@@ -318,6 +320,19 @@ export default function SwipeImageUI() {
 
         {locationAcquired && (
           <>
+            {/* Slider for selecting recommendation radius */}
+            <Box sx={{ width: '100%', maxWidth: 400, mb: 2 }}>
+              <Typography gutterBottom>Recommendation Radius: {radius} miles</Typography>
+              <Slider
+                value={radius}
+                onChange={(e, val) => setRadius(val)}
+                min={1}
+                max={100}
+                step={1}
+                valueLabelDisplay="auto"
+              />
+            </Box>
+
             {loading && <CircularProgress sx={{ my: 4 }} />}
 
             {error && !loading && <Alert severity="error" sx={{ width: '100%', mb: 2 }}>{error}</Alert>}
