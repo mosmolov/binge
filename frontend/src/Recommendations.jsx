@@ -1,81 +1,171 @@
-import { Container, Card, CardContent, CardHeader, Button, Avatar, Typography, Box } from '@mui/material';
+import React from 'react';
+import {
+  Container,
+  CardHeader,
+  Button,
+  Avatar,
+  Typography,
+  Box,
+  List,
+  ListItem,
+  ListItemAvatar,
+  ListItemText,
+  Divider,
+  Paper,
+  Fade,
+  Rating,
+} from '@mui/material';
 import { keyframes } from '@emotion/react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import StarIcon from '@mui/icons-material/Star';
 
-// Gradient background animation
+// Consistent gradient animation
 const gradientAnimation = keyframes`
   0% { background-position: 0% 50%; }
   50% { background-position: 100% 50%; }
   100% { background-position: 0% 50%; }
 `;
 
+// Fade-in animation for list items
+const itemFadeIn = keyframes`
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+`;
+
 export default function Recommendations() {
   const location = useLocation();
   const navigate = useNavigate();
   const recommendations = location.state?.recommendations || [];
+  const fallbackImageUrl = '/foodtest.jpeg';
 
   return (
     <Container
+      maxWidth={false}
+      disableGutters
       sx={{
         position: 'relative',
         minHeight: '100vh',
         display: 'flex',
         justifyContent: 'center',
-        alignItems: 'center',
-        background: 'linear-gradient(45deg, #e0f7fa, #80deea, #b2dfdb, #26a69a)',
+        alignItems: 'flex-start',
+        py: { xs: 4, sm: 6 },
+        background:
+          'linear-gradient(-45deg, #c1dfc4 0%, #deecdd 50%, #c1dfc4 100%)',
         backgroundSize: '400% 400%',
-        animation: `${gradientAnimation} 15s ease infinite`,
-        padding: 2,
-        overflow: 'hidden',
+        animation: `${gradientAnimation} 20s ease infinite`,
+        overflowY: 'auto',
       }}
     >
-      <Card
-        sx={{
-          position: 'relative',
-          zIndex: 2,
-          width: { xs: '90%', sm: 500 },
-          padding: 3,
-          borderRadius: 4,
-          boxShadow: '0px 4px 20px rgba(0, 0, 0, 0.1)',
-        }}
-      >
-        <CardHeader
-          title="Your Top Foodie Picks"
-          sx={{ textAlign: 'center', '& .MuiCardHeader-title': { fontSize: '1.8rem', fontWeight: 600, color: '#333' } }}
-        />
-        <CardContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            {recommendations.length === 0 && (
-              <Typography variant="body1" color="text.secondary" align="center">
-                No recommendations found.
+      <Fade in={true} timeout={800}>
+        <Paper
+          elevation={6}
+          sx={{
+            width: { xs: '95%', sm: '80%', md: 650 },
+            maxWidth: 650,
+            padding: { xs: 2, sm: 4 },
+            borderRadius: '16px',
+            backgroundColor: 'rgba(255, 255, 255, 0.88)',
+            backdropFilter: 'blur(10px)',
+            boxShadow: '0 8px 32px 0 rgba(31, 38, 135, 0.25)',
+            border: '1px solid rgba(255, 255, 255, 0.18)',
+          }}
+        >
+          <CardHeader
+            title="Your Top Recommendations"
+            titleTypographyProps={{
+              variant: 'h4',
+              fontWeight: 'bold',
+              color: 'primary.dark',
+              textAlign: 'center',
+            }}
+            sx={{ pb: 2 }}
+          />
+          <Box sx={{ p: 0 }}>
+            {recommendations.length === 0 ? (
+              <Typography variant="body1" color="text.secondary" align="center" sx={{ py: 4 }}>
+                No recommendations found based on your swipes.
               </Typography>
+            ) : (
+              <List disablePadding>
+                {recommendations.map((rec, index) => (
+                  <React.Fragment key={rec.restaurant.business_id || index}>
+                    <ListItem
+                      sx={{
+                        py: 2.5,
+                        px: { xs: 1, sm: 2 },
+                        opacity: 0,
+                        animation: `${itemFadeIn} 0.5s ease-out ${index * 0.1}s forwards`,
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                      }}
+                    >
+                      <ListItemAvatar sx={{ mr: 2.5, mt: 0.5 }}>
+                        <Avatar
+                          variant="rounded"
+                          src={rec.restaurant.photo_url || fallbackImageUrl}
+                          alt={rec.restaurant.name}
+                          sx={{
+                            width: { xs: 70, sm: 90 },
+                            height: { xs: 70, sm: 90 },
+                            borderRadius: '12px',
+                            boxShadow: 3,
+                          }}
+                          imgProps={{ loading: 'lazy' }}
+                          onError={(e) => { e.target.src = fallbackImageUrl; }}
+                        />
+                      </ListItemAvatar>
+                      <ListItemText
+                        primary={rec.restaurant.name}
+                        secondary={
+                          <Box component="span" sx={{ display: 'flex', flexDirection: 'column' }}>
+                            <Typography component="span" variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                              {rec.restaurant.address}
+                            </Typography>
+                            <Rating
+                              name={`rating-${index}`}
+                              value={rec.restaurant.stars || 0}
+                              readOnly
+                              precision={0.5}
+                              emptyIcon={<StarIcon style={{ opacity: 0.55 }} fontSize="inherit" />}
+                              sx={{ color: '#ffb400' }}
+                            />
+                          </Box>
+                        }
+                        primaryTypographyProps={{ variant: 'h6', fontWeight: 600, mb: 0.5 }}
+                      />
+                    </ListItem>
+                    {index < recommendations.length - 1 && <Divider variant="inset" component="li" />}
+                  </React.Fragment>
+                ))}
+              </List>
             )}
-            {recommendations.map((rec, index) => (
-              <Card key={index} sx={{ display: 'flex', alignItems: 'center', p: 2, borderRadius: 4, boxShadow: 2, mb: 2 }}>
-                <Avatar
-                  variant="rounded"
-                  src={rec.restaurant.photo_url || '/foodtest.jpeg'}
-                  alt={rec.restaurant.name}
-                  sx={{ width: 80, height: 80, mr: 3 }}
-                />
-                <Box>
-                  <Typography variant="h6" fontWeight={700}>{rec.restaurant.name}</Typography>
-                  <Typography variant="body2" color="text.secondary">{rec.restaurant.address}</Typography>
-                  <Typography variant="body2" color="#f8b500">⭐ {rec.restaurant.stars}</Typography>
-                </Box>
-              </Card>
-            ))}
+            <Button
+              fullWidth
+              variant="contained"
+              startIcon={<ArrowBackIcon />}
+              sx={{
+                mt: 4,
+                padding: '12px',
+                borderRadius: '12px',
+                fontWeight: 'bold',
+                fontSize: '1rem',
+                textTransform: 'none',
+                background: 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
+                boxShadow: '0 3px 5px 2px rgba(33, 203, 243, .3)',
+                transition: 'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out',
+                '&:hover': {
+                  transform: 'translateY(-2px)',
+                  boxShadow: '0 6px 10px 4px rgba(33, 203, 243, .4)',
+                },
+              }}
+              onClick={() => navigate('/')}
+            >
+              Swipe Again
+            </Button>
           </Box>
-          <Button
-            fullWidth
-            variant="contained"
-            sx={{ mt: 3, borderRadius: 3, fontWeight: 600, backgroundColor: '#1976d2', '&:hover': { backgroundColor: '#115293' } }}
-            onClick={() => navigate('/')}
-          >
-            Start New Session
-          </Button>
-        </CardContent>
-      </Card>
+        </Paper>
+      </Fade>
     </Container>
   );
 }
