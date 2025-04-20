@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, status
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from ..database import get_db
 from backend.models.restaurant import Restaurant
@@ -32,7 +32,7 @@ async def get_random_restaurant_ids(db=Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{restaurant_id}", response_model=Restaurant)
-async def get_restaurant_by_id(restaurant_id: str, db=Depends(get_db)):
+async def get_restaurant_by_id(restaurant_id: Union[str, int], db=Depends(get_db)):
     try:
         # debug statement
         print(f"Fetching restaurant with ID: {restaurant_id}")
