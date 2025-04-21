@@ -1,14 +1,16 @@
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.decomposition import PCA
+from sklearn.cluster import AgglomerativeClustering
 from typing import List, Dict, Tuple, Optional, Union
 import os
 import logging
 from datetime import datetime
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
+from scipy.sparse import csr_matrix
+from annoy import AnnoyIndex
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Configure logging
 logging.basicConfig(
@@ -19,23 +21,27 @@ logger = logging.getLogger('RestaurantRecommender')
 
 class RestaurantRecommender:
     def __init__(self, 
-                 data_path: str = "recommendations/data/cleaned_restaurants.csv", 
-                 embedding_model_name: str = 'all-MiniLM-L6-v2',
-                 n_components: int = 30):
+                 data_path: str = "recommendations/data/cleaned_restaurants.pkl", 
+                 embedding_model_name: str = 'all-MiniLM-L6-v2'):
         """
         Initialize the recommendation system with restaurant data.
         
         Args:
-            data_path: Path to the cleaned restaurant data CSV file
+            data_path: Path to the cleaned restaurant data file (CSV or pickle)
             embedding_model_name: Name of the Sentence Transformer model to use
-            n_components: Number of components for PCA dimensionality reduction
         """
-        self.n_components = n_components
         logger.info(f"Initializing RestaurantRecommender with data from {data_path}")
         base_dir = Path(__file__).parent if "__file__" in locals() else Path.cwd()
         
-        # Always build a new model from scratch
-        self.df = pd.read_csv(base_dir / data_path)
+        # Load data based on file extension
+        data_file = base_dir / data_path
+        if data_file.suffix == '.csv':
+            self.df = pd.read_csv(data_file)
+        elif data_file.suffix in ['.pkl', '.pickle']:
+            self.df = pd.read_pickle(data_file)
+        else:
+            raise ValueError(f"Unsupported file extension for data_path: {data_file.suffix}")
+        
         self.business_ids = self.df['business_id'].values
         # Verify required columns exist
         required_columns = ['business_id', 'latitude', 'longitude', 'stars']
@@ -77,15 +83,17 @@ class RestaurantRecommender:
         logger.info(f"Loading embedding model: {embedding_model_name}")
         self.embedding_model = SentenceTransformer(embedding_model_name)
         
-        # Generate the attribute embeddings and restaurant embeddings
+        # Generate the attribute embeddings and group similar attributes
         self._generate_attribute_name_embeddings()
-        self._create_restaurant_embeddings() 
+        self._group_attributes_by_embedding(n_groups=15)
+        # Create restaurant embeddings directly (no caching)
+        self._create_restaurant_embeddings(grouped=True)
 
         # Extract and prepare feature sets
         self._extract_features() 
         
-        # Build similarity matrix (now based on dense embeddings)
-        self._build_similarity_matrix()
+        # Build approximate content search index using Annoy
+        self._build_annoy_index(n_trees=200)
         
         # Set default weights for combining similarity components
         self.content_weight = 5.0
@@ -95,24 +103,6 @@ class RestaurantRecommender:
         self.distance_cache = {}
 
         logger.info(f"Recommender initialized with {len(self.df)} restaurants")
-
-    def _apply_dimensionality_reduction(self):
-        """Apply PCA to reduce the dimensionality of restaurant embeddings."""
-        logger.info(f"Applying PCA dimensionality reduction from {self.content_features.shape[1]} to {self.n_components} dimensions")
-        start_time = datetime.now()
-        
-        if self.n_components >= self.content_features.shape[1]:
-            logger.info(f"Skipping dimensionality reduction: requested components ({self.n_components}) >= current dimensions ({self.content_features.shape[1]})")
-            self.pca = None
-            return
-        
-        self.pca = PCA(n_components=self.n_components)
-        self.content_features = self.pca.fit_transform(self.content_features)
-        explained_variance = sum(self.pca.explained_variance_ratio_) * 100
-        
-        duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Dimensionality reduction completed in {duration:.2f} seconds. New shape: {self.content_features.shape}")
-        logger.info(f"Explained variance: {explained_variance:.2f}%")
 
     def _generate_attribute_name_embeddings(self):
         """Generates embeddings for all attribute column names."""
@@ -137,11 +127,55 @@ class RestaurantRecommender:
         emb_dim = embeddings.shape[1] if len(embeddings) > 0 else 0
         logger.info(f"Generated {len(self.attribute_name_embeddings)} attribute name embeddings (dim={emb_dim}) in {duration:.2f}s")
 
-    def _create_restaurant_embeddings(self):
+    def _group_attributes_by_embedding(self, n_groups: int = 10, linkage: str = 'average'):
+        """
+        Group attribute columns based on embedding similarity using clustering.
+        Args:
+            n_groups: Number of attribute groups to form
+            linkage: Linkage method for Agglomerative Clustering
+        Sets:
+            self.grouped_attribute_columns: List of new grouped column names
+            self.df_grouped_attributes: DataFrame with grouped attribute columns
+        """
+        if not self.attribute_name_embeddings:
+            logger.warning("No attribute name embeddings available for grouping.")
+            self.grouped_attribute_columns = self.attribute_columns
+            self.df_grouped_attributes = self.df[self.attribute_columns].copy()
+            return
+
+        # Stack embeddings into a matrix
+        emb_matrix = np.stack([self.attribute_name_embeddings[col] for col in self.attribute_columns])
+        clustering = AgglomerativeClustering(n_clusters=n_groups, metric='cosine', linkage=linkage)
+        labels = clustering.fit_predict(emb_matrix)
+
+        # Map group index to attribute columns
+        group_to_cols = {i: [] for i in range(n_groups)}
+        for col, label in zip(self.attribute_columns, labels):
+            group_to_cols[label].append(col)
+
+        # Create new grouped columns (sum of group columns, numeric only)
+        grouped_data = {}
+        grouped_names = []
+        for group_idx, cols in group_to_cols.items():
+            group_name = f'grouped_attr_{group_idx}'
+            grouped_names.append(group_name)
+            # Select only numeric columns and coerce non-numeric to NaN, then fill with 0
+            numeric_df = self.df[cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+            grouped_data[group_name] = numeric_df.sum(axis=1)
+        self.df_grouped_attributes = pd.DataFrame(grouped_data)
+        self.grouped_attribute_columns = grouped_names
+        logger.info(f"Grouped {len(self.attribute_columns)} attributes into {n_groups} groups.")
+
+    def _create_restaurant_embeddings(self, grouped: bool = False):
         """Creates a dense embedding for each restaurant by averaging its attribute name embeddings."""
         logger.info("Creating dense restaurant embeddings from attribute names...")
         start_time = datetime.now()
-        
+        if grouped and hasattr(self, 'grouped_attribute_columns'):
+            attribute_columns = self.grouped_attribute_columns
+            attribute_data = self.df_grouped_attributes[attribute_columns].values.astype(bool)
+        else:
+            attribute_columns = self.attribute_columns
+            attribute_data = self.df[attribute_columns].values.astype(bool)
         num_restaurants = len(self.df)
         if not self.attribute_name_embeddings:
             logger.warning("No attribute name embeddings available. Content features will be empty.")
@@ -151,21 +185,22 @@ class RestaurantRecommender:
             first_embedding = next(iter(self.attribute_name_embeddings.values()))
             embedding_dim = len(first_embedding)
             self.restaurant_embeddings = np.zeros((num_restaurants, embedding_dim))
-            attribute_data = self.df[self.attribute_columns].values.astype(bool)
-
             for i in range(num_restaurants):
                 present_attribute_indices = np.where(attribute_data[i])[0]
                 if len(present_attribute_indices) > 0:
-                    present_attribute_names = [self.attribute_columns[idx] for idx in present_attribute_indices]
+                    present_attribute_names = [attribute_columns[idx] for idx in present_attribute_indices]
                     embeddings_to_average = [
-                        self.attribute_name_embeddings[name] 
-                        for name in present_attribute_names 
-                        if name in self.attribute_name_embeddings
+                        self.attribute_name_embeddings.get(name, first_embedding)
+                        for name in present_attribute_names
                     ]
                     if embeddings_to_average:
                         self.restaurant_embeddings[i] = np.mean(embeddings_to_average, axis=0)
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Created {num_restaurants} restaurant embeddings in {duration:.2f}s")
+        logger.info(f"Created {num_restaurants} restaurant embeddings in {duration:.2f}s (grouped={grouped})")
+
+    def _load_or_create_restaurant_embeddings(self, grouped: bool = False, cache_path: str = None):
+        """Create restaurant embeddings without any file caching."""
+        self._create_restaurant_embeddings(grouped=grouped)
 
     def _extract_features(self):
         """Extract and prepare feature sets for similarity calculations."""
@@ -181,7 +216,6 @@ class RestaurantRecommender:
         if hasattr(self, 'restaurant_embeddings'):
             self.content_features = self.restaurant_embeddings
             logger.info(f"Using dense restaurant embeddings (shape: {self.content_features.shape}) as content features.")
-            self._apply_dimensionality_reduction()
         else:
             logger.warning("Restaurant embeddings not found. Using empty content features.")
             self.content_features = np.zeros((len(self.df), 1))
@@ -191,16 +225,16 @@ class RestaurantRecommender:
             logger.error("NaN values found in features after processing")
             raise ValueError("Input contains NaN values even after cleaning")
 
-    def _build_similarity_matrix(self):
-        """Build the content-based similarity matrix using cosine similarity."""
-        logger.info("Building content similarity matrix (using dense embeddings)")
-        start_time = datetime.now()
-        
-        self.sim_matrix = cosine_similarity(self.content_features)
-        np.fill_diagonal(self.sim_matrix, 0)
-        
-        duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Similarity matrix built in {duration:.2f} seconds")
+    def _build_annoy_index(self, n_trees: int = 10):
+        """
+        Builds an Annoy index for approximate nearest neighbor search on restaurant embeddings.
+        """
+        logger.info(f"Building Annoy index with {n_trees} trees for approximate content search")
+        dim = self.restaurant_embeddings.shape[1]
+        self.annoy_index = AnnoyIndex(dim, metric='angular')
+        for i, emb in enumerate(self.restaurant_embeddings):
+            self.annoy_index.add_item(i, emb.tolist())
+        self.annoy_index.build(n_trees)
 
     def set_weights(self, content_weight: float = 1.0, rating_weight: float = 1.0):
         """
@@ -296,7 +330,9 @@ class RestaurantRecommender:
         
         user_lat, user_lon = user_location
         logger.info(f"Generating recommendations for user at ({user_lat:.4f}, {user_lon:.4f})")
-        
+        liked_set    = {str(x) for x in liked_ids}
+        disliked_set = {str(x) for x in disliked_ids}
+
         distances = self.batch_haversine_distance(user_lat, user_lon)
         in_radius = distances <= radius_miles
         in_radius_count = np.sum(in_radius)
@@ -317,20 +353,25 @@ class RestaurantRecommender:
             actual_radius = max_distance
         
         restaurant_indices = np.where(in_radius)[0]
-        liked_indices = [i for i, bid in enumerate(self.business_ids) if bid in liked_ids]
-        disliked_indices = [i for i, bid in enumerate(self.business_ids) if bid in disliked_ids]
-        
+        liked_indices = [i for i, bid in enumerate(self.business_ids) if bid in liked_set]
+        disliked_indices = [i for i, bid in enumerate(self.business_ids) if bid in disliked_set]
+
+        # Compute content scores via cosine similarity on dense embeddings
+        # Compute full content similarity scores for all restaurants
         if liked_indices:
-            liked_sim = np.mean(self.sim_matrix[liked_indices][:, in_radius], axis=0)
+            liked_embs = self.content_features[liked_indices]
+            sim_liked = cosine_similarity(self.content_features, liked_embs).mean(axis=1)
         else:
-            liked_sim = np.zeros(np.sum(in_radius))
-        
+            sim_liked = np.zeros(len(self.df))
         if disliked_indices:
-            disliked_sim = np.mean(self.sim_matrix[disliked_indices][:, in_radius], axis=0)
+            disliked_embs = self.content_features[disliked_indices]
+            sim_disliked = cosine_similarity(self.content_features, disliked_embs).mean(axis=1)
         else:
-            disliked_sim = np.zeros(np.sum(in_radius))
-        
-        content_scores = liked_sim - disliked_sim
+            sim_disliked = np.zeros(len(self.df))
+        content_scores_full = sim_liked - sim_disliked
+        # Restrict to restaurants within radius
+        content_scores = content_scores_full[in_radius]
+
         restaurant_ratings = self.rating_features_scaled[in_radius].flatten()
         
         if liked_indices:
@@ -377,7 +418,46 @@ class RestaurantRecommender:
             if 'stars' in self.df.columns:
                 recommendation['stars'] = float(self.df.iloc[idx]['stars'])
             recommendations.append(recommendation)
-        print(recommendation)
+        print(recommendations)
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(f"Generated {len(recommendations)} recommendations in {duration:.2f} seconds within {actual_radius:.1f} miles")
         return recommendations, actual_radius
+
+    def precision_at_k(self, recommended_ids: List[str], true_ids: List[str], k: int) -> float:
+        """
+        Compute precision at k: proportion of recommended items in top-k that are relevant.
+        """
+        if k <= 0:
+            return 0.0
+        recommended_set = set(recommended_ids[:k])
+        true_set = set(true_ids)
+        return len(recommended_set & true_set) / k
+
+    def recall_at_k(self, recommended_ids: List[str], true_ids: List[str], k: int) -> float:
+        """
+        Compute recall at k: proportion of relevant items found in top-k recommendations.
+        """
+        true_set = set(true_ids)
+        if not true_set or k <= 0:
+            return 0.0
+        recommended_set = set(recommended_ids[:k])
+        return len(recommended_set & true_set) / len(true_set)
+
+    def evaluate(self, test_cases: List[Dict], top_n: int = 5) -> Dict[str, float]:
+        """
+        Evaluate the recommender on multiple test cases.
+        Each test case should be a dict with keys: 'liked_ids', 'disliked_ids', 'user_location', 'ground_truth_liked_ids'.
+        Returns average precision@top_n and recall@top_n over all cases.
+        """
+        precisions, recalls = [], []
+        for case in test_cases:
+            recs, _ = self.recommend_restaurants(
+                case['liked_ids'], case['disliked_ids'], case['user_location'], top_n=top_n
+            )
+            rec_ids = [r['business_id'] for r in recs]
+            true_ids = case.get('ground_truth_liked_ids', [])
+            precisions.append(self.precision_at_k(rec_ids, true_ids, top_n))
+            recalls.append(self.recall_at_k(rec_ids, true_ids, top_n))
+        avg_precision = float(np.mean(precisions)) if precisions else 0.0
+        avg_recall = float(np.mean(recalls)) if recalls else 0.0
+        return {'precision_at_k': avg_precision, 'recall_at_k': avg_recall}

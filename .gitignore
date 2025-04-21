@@ -7,3 +7,4 @@ cleaned_restaurants.csv
 cleaned_restaurants.json
 photos.json
 recommender_model.pkl
+backend/cache/all-MiniLM-L6-v2_restaurant_embeddings.npy

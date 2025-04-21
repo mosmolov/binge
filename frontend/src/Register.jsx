@@ -49,6 +49,7 @@ const Wave = () => (
 export default function Register() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const { register } = useAuth();
   const navigate = useNavigate();
@@ -66,7 +67,7 @@ export default function Register() {
     }
 
     try {
-      await register(username, password);
+      await register(username, email, password);
       setSuccess('Registration successful! Redirecting to login...');
       setTimeout(() => navigate('/login'), 2000); // Redirect after 2 seconds
     } catch (err) {
@@ -125,6 +126,23 @@ export default function Register() {
               fullWidth
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              required
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: '12px',
+                  transition: 'border-color 0.3s ease, box-shadow 0.3s ease',
+                  '&.Mui-focused fieldset': {
+                    boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.light}`,
+                  },
+                },
+              }}
+            />
+            <TextField
+              label="Email"
+              variant="outlined"
+              fullWidth
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               required
               sx={{
                 '& .MuiOutlinedInput-root': {
