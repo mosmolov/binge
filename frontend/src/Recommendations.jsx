@@ -14,11 +14,13 @@ import {
   Paper,
   Fade,
   Rating,
+  IconButton,
 } from '@mui/material';
 import { keyframes } from '@emotion/react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import StarIcon from '@mui/icons-material/Star';
+import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 
 // Consistent gradient animation
 const gradientAnimation = keyframes`
@@ -61,6 +63,7 @@ export default function Recommendations() {
         <Paper
           elevation={6}
           sx={{
+            position: 'relative', // enable absolute positioning for profile button
             width: { xs: '95%', sm: '80%', md: 650 },
             maxWidth: 650,
             padding: { xs: 2, sm: 4 },
@@ -71,6 +74,13 @@ export default function Recommendations() {
             border: '1px solid rgba(255, 255, 255, 0.18)',
           }}
         >
+          <IconButton
+            onClick={() => navigate('/profile')}
+            aria-label="profile"
+            sx={{ position: 'absolute', top: 8, right: 8, color: 'primary.main' }}
+          >
+            <AccountCircleIcon />
+          </IconButton>
           <CardHeader
             title="Your Top Recommendations"
             titleTypographyProps={{

@@ -93,7 +93,7 @@ class RestaurantRecommender:
         self._extract_features() 
         
         # Build approximate content search index using Annoy
-        self._build_annoy_index(n_trees=100)
+        self._build_annoy_index(n_trees=1)
         
         # Set default weights for combining similarity components
         self.content_weight = 2.0
@@ -574,3 +574,51 @@ class RestaurantRecommender:
         avg_recall = float(np.mean(recalls)) if recalls else 0.0
         logger.info(f"Evaluation complete: Avg Precision@{top_n}={avg_precision:.4f}, Avg Recall@{top_n}={avg_recall:.4f}")
         return {'precision_at_k': avg_precision, 'recall_at_k': avg_recall}
+
+    def precision_at_k(self, rec_ids: List[str], true_ids: List[str], k: int) -> float:
+        """Calculate precision@k for recommendations."""
+        if not rec_ids or not true_ids or k <= 0:
+            return 0.0
+        k = min(k, len(rec_ids))
+        relevant_recs = [r for r in rec_ids[:k] if r in true_ids]
+        return len(relevant_recs) / k if k > 0 else 0.0
+    
+    def recall_at_k(self, rec_ids: List[str], true_ids: List[str], k: int) -> float:
+        """Calculate recall@k for recommendations."""
+        if not rec_ids or not true_ids:
+            return 0.0
+        k = min(k, len(rec_ids))
+        relevant_recs = [r for r in rec_ids[:k] if r in true_ids]
+        return len(relevant_recs) / len(true_ids) if true_ids else 0.0
+    
+    def get_attributes(self) -> Dict[str, List[str]]:
+        """
+        Get attributes for restaurant additions across all restaurants.
+        
+        Returns:
+            Dictionary of attribute names and their counts
+        """
+        # Extract unique Cuisines from columns that start with Cuisine
+        all_cuisines = []
+        cuisine_columns = [col for col in self.df.columns if col.startswith('Cuisine_')]
+        for cuisine in cuisine_columns:
+            all_cuisines.append(cuisine.replace('Cuisine_', ''))
+        
+        # Extract ambience types from column names that start with Ambience
+        all_ambiences = []
+        ambience_columns = [col for col in self.df.columns if col.startswith('Ambience_')]
+        for ambience in ambience_columns:
+            all_ambiences.append(ambience.replace('Ambience_', ''))
+        
+        # Extract GoodFor attributes
+        all_good_for = []
+        good_for_columns = [col for col in self.df.columns if col.startswith('GoodFor')]
+        for good_for in good_for_columns:
+            all_good_for.append(good_for.replace('GoodFor', ''))
+        
+        # Return attribute options
+        return {
+            'Cuisines': sorted(all_cuisines),
+            'Ambiences': sorted(all_ambiences),
+            'GoodFor': sorted(all_good_for)
+        }

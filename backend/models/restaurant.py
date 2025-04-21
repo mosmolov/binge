@@ -1,6 +1,7 @@
 from beanie import Document
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+
 class Restaurant(Document):
     _id: str
     # string or int
@@ -10,6 +11,17 @@ class Restaurant(Document):
     latitude: float
     longitude: float
     stars: float
+    price: Optional[int] = None
+    attributes: Optional[Dict[str, Any]] = None
     
     class Settings:
         name = "restaurants"
+        
+class RestaurantCreate(BaseModel):
+    name: str
+    address: str
+    latitude: float
+    longitude: float
+    stars: float
+    price: Optional[int] = None
+    attributes: Optional[Dict[str, Any]] = None

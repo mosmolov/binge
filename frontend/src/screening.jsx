@@ -23,6 +23,8 @@ import RestaurantMenuIcon from "@mui/icons-material/RestaurantMenu";
 import LogoutIcon from "@mui/icons-material/Logout";
 import MyLocationIcon from "@mui/icons-material/MyLocation";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import AccountCircleIcon from '@mui/icons-material/AccountCircle';
+import AddIcon from '@mui/icons-material/Add';
 import { useAuth } from "./context/AuthContext";
 import { useNavigate } from "react-router-dom";
 
@@ -183,7 +185,7 @@ export default function SwipeImageUI() {
         disliked_ids: disliked_ids,
         user_location: [userLatitude, userLongitude],
         radius_miles: radius, // Use selected recommendation radius
-        top_n: 5, // Example count
+        top_n: 5,
       };
 
       // Call recommendation endpoint
@@ -289,6 +291,15 @@ export default function SwipeImageUI() {
           >
             Binge
           </Typography>
+          <IconButton
+            edge="end"
+            color="inherit"
+            onClick={() => navigate('/profile')}
+            aria-label="profile"
+            sx={{ color: "text.secondary", mr: 1 }}
+          >
+            <AccountCircleIcon />
+          </IconButton>
           <IconButton
             edge="end"
             color="inherit"

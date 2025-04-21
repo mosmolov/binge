@@ -1,14 +1,14 @@
-/* #root {
-  max-width: none;
+#root {
+  /* max-width: none;
   width: 100%;
   height: 100%;
   margin: 0;
-  padding: 3rem 5%;      /* more padding and responsive margins */
+  padding: 3rem 5%; */
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: left;      /* better layout for desktop */
-} */
+}
 
 .logo {
   height: 6em;
