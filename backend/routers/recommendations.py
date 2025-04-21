@@ -75,7 +75,6 @@ async def get_recommendations(
             radius_miles=request.radius_miles,
             top_n=request.top_n
             ),
-            strategy='annoy'
         )
         
         detailed_recommendations = []
