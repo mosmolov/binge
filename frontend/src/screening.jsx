@@ -173,16 +173,15 @@ export default function SwipeImageUI() {
         throw new Error(`Failed to fetch user profile: ${userProfileResponse.status}`);
       }
       const userProfile = await userProfileResponse.json();
-
-      const liked_ids = userProfile.liked_businesses || [];
-      const disliked_ids = userProfile.disliked_businesses || [];
+      console.log("User profile data:", userProfile);
+      const liked_ids = userProfile.liked_business_ids || [];
+      const disliked_ids = userProfile.disliked_business_ids || [];
 
       // Prepare request body for recommendation endpoint
       const requestBody = {
         liked_ids: liked_ids,
         disliked_ids: disliked_ids,
-        user_latitude: parseFloat(userLatitude),
-        user_longitude: parseFloat(userLongitude),
+        user_location: [userLatitude, userLongitude],
         radius_miles: radius, // Use selected recommendation radius
         top_n: 5, // Example count
       };
@@ -201,7 +200,22 @@ export default function SwipeImageUI() {
       navigate('/recommendations', { state: { recommendations: data.recommendations } });
     } catch (e) {
       console.error("Error fetching recommendations:", e);
-      setError(`Failed to get recommendations: ${e.message}`);
+      // Try to get a more specific message
+      let errorMessage = "An unknown error occurred";
+      if (e instanceof Error) {
+        errorMessage = e.message;
+      } else if (typeof e === 'string') {
+        errorMessage = e;
+      } else {
+        // Fallback for non-standard errors
+        try {
+          errorMessage = JSON.stringify(e);
+        } catch (stringifyError) {
+          // If stringify fails, use a generic message
+          console.error("Could not stringify error object:", stringifyError);
+        }
+      }
+      setError(`Failed to get recommendations: ${errorMessage}`);
       setLoading(false);
     }
   };

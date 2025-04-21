@@ -56,7 +56,7 @@ async def get_recommendations(
     Uses attribute name embeddings, rating similarity, and geographic proximity.
     """
     try:
-        user_location = (request.user_latitude, request.user_longitude)
+        user_location = request.user_location
         # merge saved user preferences if user_id provided
         liked_ids = request.liked_ids.copy()
         disliked_ids = request.disliked_ids.copy()
@@ -68,11 +68,14 @@ async def get_recommendations(
             liked_ids = list({*user.liked_business_ids, *liked_ids})
             disliked_ids = list({*user.disliked_business_ids, *disliked_ids})
         recommendations_raw, actual_radius = model.recommend_restaurants(
+            RecommendationRequest(
             liked_ids=liked_ids,
             disliked_ids=disliked_ids,
             user_location=user_location,
             radius_miles=request.radius_miles,
             top_n=request.top_n
+            ),
+            strategy='annoy'
         )
         
         detailed_recommendations = []

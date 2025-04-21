@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import AgglomerativeClustering
-from typing import List, Dict, Tuple, Optional, Union
+from typing import List, Dict, Literal, Tuple, Optional, Union
 import os
 import logging
 from datetime import datetime
@@ -11,7 +11,7 @@ from sentence_transformers import SentenceTransformer
 from scipy.sparse import csr_matrix
 from annoy import AnnoyIndex
 from sklearn.metrics.pairwise import cosine_similarity
-
+from backend.models.recommendations import RecommendationRequest, RecommendationResponse
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -85,7 +85,7 @@ class RestaurantRecommender:
         
         # Generate the attribute embeddings and group similar attributes
         self._generate_attribute_name_embeddings()
-        self._group_attributes_by_embedding(n_groups=15)
+        self._group_attributes_by_embedding(n_groups=50, linkage='average')
         # Create restaurant embeddings directly (no caching)
         self._create_restaurant_embeddings(grouped=True)
 
@@ -93,10 +93,10 @@ class RestaurantRecommender:
         self._extract_features() 
         
         # Build approximate content search index using Annoy
-        self._build_annoy_index(n_trees=200)
+        self._build_annoy_index(n_trees=100)
         
         # Set default weights for combining similarity components
-        self.content_weight = 5.0
+        self.content_weight = 2.0
         self.rating_weight = 1.0
         
         # Initialize distance cache
@@ -187,7 +187,7 @@ class RestaurantRecommender:
             self.restaurant_embeddings = np.zeros((num_restaurants, embedding_dim))
             for i in range(num_restaurants):
                 present_attribute_indices = np.where(attribute_data[i])[0]
-                if len(present_attribute_indices) > 0:
+                if len(present_attribute_indices > 0):
                     present_attribute_names = [attribute_columns[idx] for idx in present_attribute_indices]
                     embeddings_to_average = [
                         self.attribute_name_embeddings.get(name, first_embedding)
@@ -196,7 +196,12 @@ class RestaurantRecommender:
                     if embeddings_to_average:
                         self.restaurant_embeddings[i] = np.mean(embeddings_to_average, axis=0)
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Created {num_restaurants} restaurant embeddings in {duration:.2f}s (grouped={grouped})")
+        logger.info(f"Created {num_restaurants} restaurant embeddings (shape: {self.restaurant_embeddings.shape}) in {duration:.2f}s (grouped={grouped})")
+        # Add check for zero embeddings
+        if np.all(self.restaurant_embeddings == 0):
+            logger.warning("All generated restaurant embeddings are zero. Content scores will likely be zero.")
+        elif np.isnan(self.restaurant_embeddings).any():
+             logger.warning("NaN values found in generated restaurant embeddings.")
 
     def _load_or_create_restaurant_embeddings(self, grouped: bool = False, cache_path: str = None):
         """Create restaurant embeddings without any file caching."""
@@ -296,50 +301,302 @@ class RestaurantRecommender:
 
     def recommend_restaurants(
         self, 
-        liked_ids: List[str], 
-        disliked_ids: List[str],
-        user_location: Tuple[float, float],
-        radius_miles: float = 10.0,
+        request: Union[RecommendationRequest, Dict],
+        strategy: Literal['annoy', 'cosine_similarity'] = 'annoy',
         default_radius_miles: float = 25.0,
         min_recommendations: int = 5,
-        location_weight: float = 1.0,
-        top_n: int = 5
+        # Allow overriding weights via parameters
+        content_weight: Optional[float] = None,
+        rating_weight: Optional[float] = None,
+        location_weight: Optional[float] = None, # Default defined in methods
+        top_n: int = 5,
+        annoy_search_k: int = 1000,
+        location_search_k: int = 1000
     ) -> Tuple[List[Dict], float]:
         """
         Recommend restaurants based on user preferences and location.
         
         Args:
-            liked_ids: Business IDs of restaurants the user likes
-            disliked_ids: Business IDs of restaurants the user dislikes
-            user_location: (latitude, longitude) of the user's location
-            radius_miles: Maximum search radius in miles
+            request: Either a RecommendationRequest object or a dict with liked_ids, disliked_ids, user_location, and radius_miles
+            strategy: Which recommendation strategy to use ('annoy' or 'cosine_similarity')
             default_radius_miles: Fallback radius if not enough restaurants are found
             min_recommendations: Minimum number of restaurants to consider
-            location_weight: Weight for proximity score
+            content_weight: Weight for content-based similarity (overrides instance default)
+            rating_weight: Weight for rating similarity (overrides instance default)
+            location_weight: Weight for proximity score (overrides method default)
             top_n: Number of recommendations to return
+            annoy_search_k: Number of nearest neighbors to retrieve from Annoy index based on content
+            location_search_k: Number of nearest neighbors to consider based purely on location
             
         Returns:
             A tuple of:
                 - List of recommended restaurants with metadata
                 - The actual radius used for recommendations
         """
+        # Convert dict to RecommendationRequest if needed
+        if isinstance(request, dict):
+            request = RecommendationRequest(
+                liked_ids=request.get('liked_ids', []),
+                disliked_ids=request.get('disliked_ids', []),
+                user_location=request.get('user_location'),
+                radius_miles=request.get('radius_miles', 10.0)
+            )
+        
+        if strategy == 'annoy':
+            return self._recommend_restaurants_annoy(
+                request=request,
+                default_radius_miles=default_radius_miles,
+                min_recommendations=min_recommendations,
+                # Pass weights down, using instance defaults if None
+                content_weight=content_weight if content_weight is not None else self.content_weight,
+                rating_weight=rating_weight if rating_weight is not None else self.rating_weight,
+                location_weight=location_weight, # Pass through, method handles default
+                top_n=top_n,
+                annoy_search_k=annoy_search_k,
+                location_search_k=location_search_k
+            )
+        elif strategy == 'cosine_similarity':
+            return self._recommend_restaurants_cosine(
+                request=request,
+                default_radius_miles=default_radius_miles,
+                min_recommendations=min_recommendations,
+                # Pass weights down, using instance defaults if None
+                content_weight=content_weight if content_weight is not None else self.content_weight,
+                rating_weight=rating_weight if rating_weight is not None else self.rating_weight,
+                location_weight=location_weight, # Pass through, method handles default
+                top_n=top_n
+            )
+        else:
+            raise ValueError(f"Unknown recommendation strategy: {strategy}. Use 'annoy' or 'cosine_similarity'.")
+
+    def _recommend_restaurants_annoy(
+        self, 
+        request: RecommendationRequest,
+        default_radius_miles: float = 25.0,
+        min_recommendations: int = 20,
+        # Accept weights, provide default for location_weight
+        content_weight: float = 2.0, # Default from instance
+        rating_weight: float = 1.0,  # Default from instance
+        location_weight: Optional[float] = 10.0, # Default specific to this method
+        top_n: int = 5,
+        annoy_search_k: int = 1000,
+        location_search_k: int = 1000
+    ) -> Tuple[List[Dict], float]:
+        """
+        Recommend restaurants based on user preferences and location, using Annoy for candidate generation.
+        """
+        # Use provided location_weight or the default for this method
+        effective_location_weight = location_weight if location_weight is not None else 10.0
+
+        start_time = datetime.now()
+        if request.user_location is None:
+            raise ValueError("User location is required for recommendations")
+        user_lat, user_lon = request.user_location[0], request.user_location[1]
+        logger.info(f"Generating recommendations for user at ({user_lat:.4f}, {user_lon:.4f}) using Annoy (k={annoy_search_k}) and Location (k={location_search_k})")
+        liked_set = set(request.liked_ids)
+        disliked_set = set(request.disliked_ids)
+        liked_indices = [i for i, bid in enumerate(self.business_ids) if bid in liked_set]
+        disliked_indices = [i for i, bid in enumerate(self.business_ids) if bid in disliked_set]
+        logger.info(f"Liked indices: {liked_indices}, Disliked indices: {disliked_indices}")
+
+        # --- Candidate Generation ---
+
+        # 1. Get candidates based on content similarity (Annoy)
+        annoy_candidate_indices = np.array([], dtype=int)
+        if liked_indices:
+            # Calculate average embedding of liked restaurants
+            liked_embs = self.content_features[liked_indices]
+            avg_liked_emb = np.mean(liked_embs, axis=0)
+            
+            # Find nearest neighbors using Annoy
+            annoy_candidate_indices, _ = self.annoy_index.get_nns_by_vector(
+                avg_liked_emb, annoy_search_k, include_distances=True
+            )
+            annoy_candidate_indices = np.array(annoy_candidate_indices) # Ensure numpy array
+            logger.info(f"Retrieved {len(annoy_candidate_indices)} candidates from Annoy based on liked items.")
+        else:
+             logger.info("No liked items provided, skipping Annoy search.")
+
+        # 2. Get candidates based on proximity
+        distances_all = self.batch_haversine_distance(user_lat, user_lon)
+        # Ensure location_search_k is not larger than the total number of restaurants
+        num_restaurants = len(self.df)
+        actual_location_search_k = min(location_search_k, num_restaurants)
+        # Get indices of the closest restaurants
+        location_candidate_indices = np.argsort(distances_all)[:actual_location_search_k]
+        logger.info(f"Retrieved {len(location_candidate_indices)} candidates based on proximity (top {actual_location_search_k}).")
+
+        # 3. Combine candidate sets (Annoy + Location) and remove duplicates
+        candidate_indices = np.union1d(annoy_candidate_indices, location_candidate_indices)
+        logger.info(f"Combined Annoy and location candidates: {len(candidate_indices)} unique indices.")
+
+        # --- Filtering Candidates --- 
+        
+        # 1. Filter by Distance Radius (using the combined candidate set)
+        # Get distances only for the combined candidates
+        distances_candidates = distances_all[candidate_indices]
+        
+        in_radius_mask = distances_candidates <= request.radius_miles
+        actual_radius = request.radius_miles
+        
+        # Expand radius if too few candidates in the combined set are within the initial radius
+        if np.sum(in_radius_mask) < min_recommendations and len(candidate_indices) >= min_recommendations:
+            logger.info(f"Only {np.sum(in_radius_mask)} combined candidates within {request.radius_miles} miles. Expanding to {default_radius_miles} miles.")
+            in_radius_mask = distances_candidates <= default_radius_miles
+            actual_radius = default_radius_miles
+
+        # If still too few after expanding, take the closest candidates from the combined set
+        if np.sum(in_radius_mask) < min_recommendations:
+             logger.info(f"Only {np.sum(in_radius_mask)} combined candidates within {actual_radius} miles. Taking {min_recommendations} closest combined candidates.")
+             # Sort candidates by distance and take the top min_recommendations
+             closest_candidate_indices_local = np.argsort(distances_candidates)[:min(min_recommendations, len(candidate_indices))]
+             in_radius_mask = np.zeros_like(distances_candidates, dtype=bool)
+             # Check if closest_candidate_indices_local is not empty before trying to index
+             if len(closest_candidate_indices_local) > 0:
+                 in_radius_mask[closest_candidate_indices_local] = True
+                 # Update actual_radius to the distance of the furthest included candidate
+                 actual_radius = distances_candidates[closest_candidate_indices_local[-1]]
+             else: # Handle edge case where candidate_indices was empty
+                 actual_radius = 0
+
+        # Apply the radius mask to the original candidate_indices
+        filtered_indices_global = candidate_indices[in_radius_mask]
+        if len(filtered_indices_global) == 0:
+            logger.warning("No candidates found after distance filtering. Returning empty list.")
+            return [], actual_radius
+
+        # 2. Filter out already rated restaurants
+        already_rated_mask = np.array([self.business_ids[idx] in liked_set or self.business_ids[idx] in disliked_set 
+                                       for idx in filtered_indices_global])
+        
+        final_candidate_indices = filtered_indices_global[~already_rated_mask]
+        if len(final_candidate_indices) == 0:
+            logger.warning("No candidates left after removing already rated items. Returning empty list.")
+            return [], actual_radius
+        
+        logger.info(f"Filtered down to {len(final_candidate_indices)} final candidates.")
+
+        # --- Score Calculation for Final Candidates --- 
+        
+        # Get features only for the final candidates
+        candidate_content_features = self.content_features[final_candidate_indices]
+        candidate_rating_features_scaled = self.rating_features_scaled[final_candidate_indices].flatten()
+        candidate_distances = distances_all[final_candidate_indices]
+
+        # 1. Content Scores
+        if liked_indices:
+            liked_embs = self.content_features[liked_indices]
+            sim_liked = cosine_similarity(candidate_content_features, liked_embs).mean(axis=1)
+        else:
+            sim_liked = np.zeros(len(final_candidate_indices))
+            
+        if disliked_indices:
+            disliked_embs = self.content_features[disliked_indices]
+            sim_disliked = cosine_similarity(candidate_content_features, disliked_embs).mean(axis=1)
+        else:
+            sim_disliked = np.zeros(len(final_candidate_indices))
+            
+        content_scores = sim_liked - sim_disliked
+        logger.info(f"Shape of content_scores (candidates): {content_scores.shape}, Example values: {content_scores[:5]}")
+
+        # 2. Rating Scores
+        if liked_indices:
+            liked_ratings = np.mean(self.rating_features_scaled[liked_indices])
+            rating_diff = np.abs(candidate_rating_features_scaled - liked_ratings)
+            max_diff = np.max(rating_diff) if len(rating_diff) > 0 else 1.0
+            rating_scores = 1 - (rating_diff / max_diff) if max_diff > 0 else np.ones_like(rating_diff)
+        else:
+            min_rating = np.min(candidate_rating_features_scaled)
+            max_rating = np.max(candidate_rating_features_scaled)
+            # Handle division by zero if all candidate ratings are the same
+            if max_rating > min_rating:
+                rating_scores = (candidate_rating_features_scaled - min_rating) / (max_rating - min_rating)
+            elif len(candidate_rating_features_scaled) > 0: # Check if there are candidates
+                # All candidates have the same rating, assign a neutral score
+                rating_scores = np.full_like(candidate_rating_features_scaled, 0.5)
+            else:
+                # No candidates, return empty array
+                rating_scores = np.array([])
+        logger.info(f"Shape of rating_scores (candidates): {rating_scores.shape}, Example values: {rating_scores[:5]}")
+
+        # 3. Proximity Scores
+        # Avoid division by zero if actual_radius is 0
+        proximity_scores = 1 - (candidate_distances / actual_radius) if actual_radius > 0 else np.ones_like(candidate_distances)
+        logger.info(f"Shape of proximity_scores (candidates): {proximity_scores.shape}, Example values: {proximity_scores[:5]}")
+
+        # --- Combine Scores and Rank --- 
+        final_scores = (
+            content_weight * content_scores +      # Use passed-in weight
+            rating_weight * rating_scores +        # Use passed-in weight
+            effective_location_weight * proximity_scores # Use effective weight
+        )
+        logger.info(f"Shape of final_scores (candidates): {final_scores.shape}, Example values: {final_scores[:5]}")
+
+        # Get top N indices from the final candidates
+        # Need to sort based on the scores calculated for the candidates
+        top_indices_local = np.argsort(final_scores)[::-1][:top_n]
+        
+        # Map local indices back to global indices
+        top_indices_global = final_candidate_indices[top_indices_local]
+
+        # --- Format Recommendations --- 
+        recommendations = []
+        for i, idx in enumerate(top_indices_global):
+            local_idx = top_indices_local[i] # Get the index within the candidate arrays
+            restaurant_id = self.business_ids[idx]
+            recommendation = {
+                'business_id': restaurant_id,
+                'distance_miles': float(candidate_distances[local_idx]),
+                'content_score': float(content_scores[local_idx]),
+                'rating_score': float(rating_scores[local_idx]),
+                'proximity_score': float(proximity_scores[local_idx]),
+                'final_score': float(final_scores[local_idx])
+            }
+            if 'name' in self.df.columns:
+                recommendation['name'] = self.df.iloc[idx]['name']
+            if 'stars' in self.df.columns:
+                recommendation['stars'] = float(self.df.iloc[idx]['stars'])
+            recommendations.append(recommendation)
+            
+        duration = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Generated {len(recommendations)} recommendations in {duration:.2f} seconds using Annoy within {actual_radius:.1f} miles")
+        logger.info(f"Top recommendations: {recommendations[:5] if recommendations else 'None'}")
+        return recommendations, actual_radius
+
+    def _recommend_restaurants_cosine(
+        self, 
+        request: RecommendationRequest,
+        default_radius_miles: float = 25.0,
+        min_recommendations: int = 5,
+        # Accept weights, provide default for location_weight
+        content_weight: float = 2.0, # Default from instance
+        rating_weight: float = 1.0,  # Default from instance
+        location_weight: Optional[float] = 15.0, # Default specific to this method
+        top_n: int = 5
+    ) -> Tuple[List[Dict], float]:
+        """
+        Original recommendation method using full cosine similarity calculation.
+        """
+        # Use provided location_weight or the default for this method
+        effective_location_weight = location_weight if location_weight is not None else 1.0
+
         start_time = datetime.now()
         
-        if user_location is None:
+        if request.user_location is None:
             raise ValueError("User location is required for recommendations")
         
-        user_lat, user_lon = user_location
-        logger.info(f"Generating recommendations for user at ({user_lat:.4f}, {user_lon:.4f})")
-        liked_set    = {str(x) for x in liked_ids}
-        disliked_set = {str(x) for x in disliked_ids}
+        user_lat, user_lon = request.user_location
+        logger.info(f"Generating recommendations for user at ({user_lat:.4f}, {user_lon:.4f}) using cosine similarity")
+        liked_set = set(request.liked_ids)
+        disliked_set = set(request.disliked_ids)
 
         distances = self.batch_haversine_distance(user_lat, user_lon)
-        in_radius = distances <= radius_miles
+        in_radius = distances <= request.radius_miles
         in_radius_count = np.sum(in_radius)
-        actual_radius = radius_miles
+        actual_radius = request.radius_miles
         
         if in_radius_count < min_recommendations:
-            logger.info(f"Only {in_radius_count} restaurants within {radius_miles} miles. Expanding to default radius of {default_radius_miles} miles.")
+            logger.info(f"Only {in_radius_count} restaurants within {request.radius_miles} miles. Expanding to default radius of {default_radius_miles} miles.")
             in_radius = distances <= default_radius_miles
             in_radius_count = np.sum(in_radius)
             actual_radius = default_radius_miles
@@ -380,20 +637,26 @@ class RestaurantRecommender:
             max_diff = np.max(rating_diff) if len(rating_diff) > 0 else 1.0
             rating_scores = 1 - (rating_diff / max_diff) if max_diff > 0 else np.ones_like(rating_diff)
         else:
-            rating_scores = (restaurant_ratings - np.min(restaurant_ratings)) / \
-                           (np.max(restaurant_ratings) - np.min(restaurant_ratings))
+            min_rating = np.min(restaurant_ratings)
+            max_rating = np.max(restaurant_ratings)
+            # Handle division by zero if all candidate ratings are the same
+            if max_rating > min_rating:
+                rating_scores = (restaurant_ratings - min_rating) / (max_rating - min_rating)
+            else:
+                # All candidates have the same rating, assign a neutral score
+                rating_scores = np.full_like(restaurant_ratings, 0.5)
         
         distances_in_radius = distances[in_radius]
         proximity_scores = 1 - (distances_in_radius / actual_radius)
         final_scores = (
-            self.content_weight * content_scores +
-            self.rating_weight * rating_scores +
-            location_weight * proximity_scores
+            content_weight * content_scores +      # Use passed-in weight
+            # rating_weight * rating_scores +        # Use passed-in weight
+            effective_location_weight * proximity_scores # Use effective weight
         )
         
         already_rated_mask = np.zeros(len(restaurant_indices), dtype=bool)
         for i, idx in enumerate(restaurant_indices):
-            if self.business_ids[idx] in liked_ids or self.business_ids[idx] in disliked_ids:
+            if self.business_ids[idx] in liked_set or self.business_ids[idx] in disliked_set:
                 already_rated_mask[i] = True
         
         final_scores[already_rated_mask] = -np.inf
@@ -418,46 +681,7 @@ class RestaurantRecommender:
             if 'stars' in self.df.columns:
                 recommendation['stars'] = float(self.df.iloc[idx]['stars'])
             recommendations.append(recommendation)
-        print(recommendations)
+            
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Generated {len(recommendations)} recommendations in {duration:.2f} seconds within {actual_radius:.1f} miles")
+        logger.info(f"Generated {len(recommendations)} recommendations in {duration:.2f} seconds using cosine similarity within {actual_radius:.1f} miles")
         return recommendations, actual_radius
-
-    def precision_at_k(self, recommended_ids: List[str], true_ids: List[str], k: int) -> float:
-        """
-        Compute precision at k: proportion of recommended items in top-k that are relevant.
-        """
-        if k <= 0:
-            return 0.0
-        recommended_set = set(recommended_ids[:k])
-        true_set = set(true_ids)
-        return len(recommended_set & true_set) / k
-
-    def recall_at_k(self, recommended_ids: List[str], true_ids: List[str], k: int) -> float:
-        """
-        Compute recall at k: proportion of relevant items found in top-k recommendations.
-        """
-        true_set = set(true_ids)
-        if not true_set or k <= 0:
-            return 0.0
-        recommended_set = set(recommended_ids[:k])
-        return len(recommended_set & true_set) / len(true_set)
-
-    def evaluate(self, test_cases: List[Dict], top_n: int = 5) -> Dict[str, float]:
-        """
-        Evaluate the recommender on multiple test cases.
-        Each test case should be a dict with keys: 'liked_ids', 'disliked_ids', 'user_location', 'ground_truth_liked_ids'.
-        Returns average precision@top_n and recall@top_n over all cases.
-        """
-        precisions, recalls = [], []
-        for case in test_cases:
-            recs, _ = self.recommend_restaurants(
-                case['liked_ids'], case['disliked_ids'], case['user_location'], top_n=top_n
-            )
-            rec_ids = [r['business_id'] for r in recs]
-            true_ids = case.get('ground_truth_liked_ids', [])
-            precisions.append(self.precision_at_k(rec_ids, true_ids, top_n))
-            recalls.append(self.recall_at_k(rec_ids, true_ids, top_n))
-        avg_precision = float(np.mean(precisions)) if precisions else 0.0
-        avg_recall = float(np.mean(recalls)) if recalls else 0.0
-        return {'precision_at_k': avg_precision, 'recall_at_k': avg_recall}
