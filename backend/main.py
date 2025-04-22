@@ -50,7 +50,6 @@ app.add_middleware(
 # Include the routers
 app.include_router(photos_router)
 app.include_router(restaurants_router)
-app.include_router(images_router)
 app.include_router(recommendations_router)
 app.include_router(auth_router)
 app.include_router(users_router)
