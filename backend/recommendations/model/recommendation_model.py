@@ -51,8 +51,8 @@ class RestaurantRecommender:
 
         # Identify attribute columns (used for content features)
         self.attribute_columns = [col for col in self.df.columns 
-                                  if col not in ['business_id', 'latitude', 'longitude', 'stars']]
-        
+                                  if col not in ['business_id', 'latitude', 'longitude', 'stars', 'is_michelin']]
+        self._attr_weights = self._compute_attribute_idf(self.attribute_columns)
         # Check for NaN values in the dataframe
         nan_count = self.df.isna().sum().sum()
         if nan_count > 0:
@@ -74,7 +74,7 @@ class RestaurantRecommender:
                 if nan_in_attributes > 0:
                     logger.info(f"Filling {nan_in_attributes} NaN values in attribute columns with 0.")
                     self.df[self.attribute_columns] = self.df[self.attribute_columns].fillna(0)
-            
+        
             # Re-index after potential row drops
             self.df = self.df.reset_index(drop=True)
             self.business_ids = self.df['business_id'].values
@@ -87,17 +87,16 @@ class RestaurantRecommender:
         self._generate_attribute_name_embeddings()
         self._group_attributes_by_embedding(n_groups=50, linkage='average')
         # Create restaurant embeddings directly (no caching)
-        self._create_restaurant_embeddings(grouped=True)
+        self._create_restaurant_embeddings(grouped=False)
 
         # Extract and prepare feature sets
         self._extract_features() 
         
         # Build approximate content search index using Annoy
-        self._build_annoy_index(n_trees=1)
+        self._build_annoy_index(n_trees=50)
         
         # Set default weights for combining similarity components
         self.content_weight = 2.0
-        self.rating_weight = 1.0
         # Initialize weight for price similarity component
         self.price_weight = 1.0
         
@@ -105,7 +104,6 @@ class RestaurantRecommender:
         self.distance_cache = {}
 
         logger.info(f"Recommender initialized with {len(self.df)} restaurants")
-
     def _generate_attribute_name_embeddings(self):
         """Generates embeddings for all attribute column names."""
         logger.info("Generating embeddings for attribute names...")
@@ -167,6 +165,22 @@ class RestaurantRecommender:
         self.df_grouped_attributes = pd.DataFrame(grouped_data)
         self.grouped_attribute_columns = grouped_names
         logger.info(f"Grouped {len(self.attribute_columns)} attributes into {n_groups} groups.")
+    def _compute_attribute_idf(self, attr_cols: List[str]) -> np.ndarray:
+        """
+        Returns a weight per attribute column.  Common flags ≈ 1,   very rare flags ≪ 1
+        so they contribute less when we average embeddings.
+        """
+        # how many restaurants have the flag turned on?
+        dfreq = np.maximum(1,
+                        self.df[attr_cols].astype(bool).sum(axis=0).values)
+        # inverse frequency (IDF)  – use sqrt to soften the curve
+        raw_idf = np.sqrt(len(self.df) / dfreq)
+
+        # Convert to weights that *down‑weight* rarity
+        #   common flag (dfreq ~ N) → raw_idf ~1   → weight ~1
+        #   very rare  (dfreq ~1)   → raw_idf ~√N → weight very small
+        weights = raw_idf.max() / raw_idf
+        return weights.astype("float32")
 
     def _create_restaurant_embeddings(self, grouped: bool = False):
         """Creates a dense embedding for each restaurant by averaging its attribute name embeddings."""
@@ -191,12 +205,15 @@ class RestaurantRecommender:
                 present_attribute_indices = np.where(attribute_data[i])[0]
                 if len(present_attribute_indices) > 0:
                     present_attribute_names = [attribute_columns[idx] for idx in present_attribute_indices]
+                    weights = self._attr_weights[present_attribute_indices]          # 1‑D array
                     embeddings_to_average = [
-                        self.attribute_name_embeddings.get(name, first_embedding)
-                        for name in present_attribute_names
+                        self.attribute_name_embeddings.get(name, first_embedding) * w
+                        for name, w in zip(present_attribute_names, weights)
                     ]
-                    if embeddings_to_average:
-                        self.restaurant_embeddings[i] = np.mean(embeddings_to_average, axis=0)
+                    self.restaurant_embeddings[i] = (
+                        np.sum(embeddings_to_average, axis=0) / np.sum(weights)
+                    )
+
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(f"Created {num_restaurants} restaurant embeddings (shape: {self.restaurant_embeddings.shape}) in {duration:.2f}s (grouped={grouped})")
         # Add check for zero embeddings
@@ -215,9 +232,6 @@ class RestaurantRecommender:
         self.geo_features = self.df[['latitude', 'longitude']].values
         
         # Star ratings
-        self.rating_features = self.df[['stars']].values
-        scaler = StandardScaler()
-        self.rating_features_scaled = scaler.fit_transform(self.rating_features.reshape(-1, 1))
         # Price features (RestaurantsPriceRange2)
         if 'RestaurantsPriceRange2' in self.df.columns:
             logger.info("Price range column found, processing...")
@@ -239,7 +253,7 @@ class RestaurantRecommender:
             self.content_features = np.zeros((len(self.df), 1))
             
         # Verify no NaN values in features
-        if np.isnan(self.geo_features).any() or np.isnan(self.rating_features_scaled).any() or np.isnan(self.content_features).any():
+        if np.isnan(self.geo_features).any() or np.isnan(self.content_features).any():
             logger.error("NaN values found in features after processing")
             raise ValueError("Input contains NaN values even after cleaning")
 
@@ -249,24 +263,27 @@ class RestaurantRecommender:
         """
         logger.info(f"Building Annoy index with {n_trees} trees for approximate content search")
         dim = self.restaurant_embeddings.shape[1]
-        self.annoy_index = AnnoyIndex(dim, metric='angular')
+        self.annoy_regular = AnnoyIndex(dim, "angular")
+        self.annoy_michelin = AnnoyIndex(dim, "angular")
         for i, emb in enumerate(self.restaurant_embeddings):
-            self.annoy_index.add_item(i, emb.tolist())
-        self.annoy_index.build(n_trees)
+            if self.df.at[i, "is_michelin"]:
+                self.annoy_michelin.add_item(i, emb.tolist())
+            else:
+                self.annoy_regular.add_item(i, emb.tolist())
+        self.annoy_regular.build(40)
+        self.annoy_michelin.build(10)
 
-    def set_weights(self, content_weight: float = 1.0, rating_weight: float = 1.0):
+    def set_weights(self, content_weight: float = 1.0):
         """
         Set weights for different components of the recommendation algorithm.
         
         Args:
             content_weight: Weight for content-based similarity
-            rating_weight: Weight for rating similarity
         """
         self.content_weight = content_weight
-        self.rating_weight = rating_weight
         # Update price weight as well
         self.price_weight = getattr(self, 'price_weight', 1.0)
-        logger.info(f"Weights updated: content={content_weight}, rating={rating_weight}, price={self.price_weight}")
+        logger.info(f"Weights updated: content={content_weight}, price={self.price_weight}")
 
     def haversine_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """
@@ -355,25 +372,25 @@ class RestaurantRecommender:
         disliked_indices = [i for i, bid in enumerate(self.business_ids) if bid in disliked_set]
         logger.info(f"Liked indices: {liked_indices}, Disliked indices: {disliked_indices}")
 
-        # --- Candidate Generation ---
-
-        # 1. Get candidates based on content similarity (Annoy)
         annoy_candidate_indices = np.array([], dtype=int)
         if liked_indices:
             # Calculate average embedding of liked restaurants
             liked_embs = self.content_features[liked_indices]
             avg_liked_emb = np.mean(liked_embs, axis=0)
             
-            # Find nearest neighbors using Annoy
-            annoy_candidate_indices, _ = self.annoy_index.get_nns_by_vector(
+            # Find nearest neighbors using both Annoy indices
+            reg_inds, _ = self.annoy_regular.get_nns_by_vector(
                 avg_liked_emb, annoy_search_k, include_distances=True
             )
-            annoy_candidate_indices = np.array(annoy_candidate_indices) # Ensure numpy array
-            logger.info(f"Retrieved {len(annoy_candidate_indices)} candidates from Annoy based on liked items.")
+            mic_inds, _ = self.annoy_michelin.get_nns_by_vector(
+                avg_liked_emb, annoy_search_k, include_distances=True
+            )
+            annoy_candidate_indices = np.union1d(reg_inds, mic_inds)
+            logger.info(f"Retrieved {len(annoy_candidate_indices)} candidates from Annoy indices based on liked items.")
         else:
              logger.info("No liked items provided, skipping Annoy search.")
 
-        # 2. Get candidates based on proximity
+        
         distances_all = self.batch_haversine_distance(user_lat, user_lon)
         # Ensure location_search_k is not larger than the total number of restaurants
         num_restaurants = len(self.df)
@@ -386,9 +403,6 @@ class RestaurantRecommender:
         candidate_indices = np.union1d(annoy_candidate_indices, location_candidate_indices)
         logger.info(f"Combined Annoy and location candidates: {len(candidate_indices)} unique indices.")
 
-        # --- Filtering Candidates --- 
-        
-        # 1. Filter by Distance Radius (using the combined candidate set)
         # Get distances only for the combined candidates
         distances_candidates = distances_all[candidate_indices]
         
@@ -436,7 +450,6 @@ class RestaurantRecommender:
         
         # Get features only for the final candidates
         candidate_content_features = self.content_features[final_candidate_indices]
-        candidate_rating_features_scaled = self.rating_features_scaled[final_candidate_indices].flatten()
         candidate_distances = distances_all[final_candidate_indices]
 
         # 1. Content Scores
@@ -454,26 +467,7 @@ class RestaurantRecommender:
             
         content_scores = sim_liked - sim_disliked
         logger.info(f"Shape of content_scores (candidates): {content_scores.shape}, Example values: {content_scores[:5]}")
-
-        # 2. Rating Scores
-        if liked_indices:
-            liked_ratings = np.mean(self.rating_features_scaled[liked_indices])
-            rating_diff = np.abs(candidate_rating_features_scaled - liked_ratings)
-            max_diff = np.max(rating_diff) if len(rating_diff) > 0 else 1.0
-            rating_scores = 1 - (rating_diff / max_diff) if max_diff > 0 else np.ones_like(rating_diff)
-        else:
-            min_rating = np.min(candidate_rating_features_scaled)
-            max_rating = np.max(candidate_rating_features_scaled)
-            # Handle division by zero if all candidate ratings are the same
-            if max_rating > min_rating:
-                rating_scores = (candidate_rating_features_scaled - min_rating) / (max_rating - min_rating)
-            elif len(candidate_rating_features_scaled) > 0: # Check if there are candidates
-                # All candidates have the same rating, assign a neutral score
-                rating_scores = np.full_like(candidate_rating_features_scaled, 0.5)
-            else:
-                # No candidates, return empty array
-                rating_scores = np.array([])
-        logger.info(f"Shape of rating_scores (candidates): {rating_scores.shape}, Example values: {rating_scores[:5]}")
+        
 
         # 3. Proximity Scores
         # Avoid division by zero if actual_radius is 0
@@ -497,22 +491,40 @@ class RestaurantRecommender:
                 price_scores = np.full_like(candidate_price_scaled, 0.5)
         logger.info(f"Shape of price_scores (candidates): {price_scores.shape}, Example values: {price_scores[:5]}")
 
+        # Rating Scores based on restaurant star ratings
+        candidate_ratings = self.df.loc[final_candidate_indices, 'stars'].values.astype(float)
+        if liked_indices:
+            avg_liked_rating = np.mean(self.df.loc[liked_indices, 'stars'].values.astype(float))
+            rating_diff = np.abs(candidate_ratings - avg_liked_rating)
+            max_rating_diff = np.max(rating_diff) if rating_diff.size > 0 else 1.0
+            rating_scores = 1 - (rating_diff / max_rating_diff) if max_rating_diff > 0 else np.ones_like(rating_diff)
+        else:
+            min_rating = np.min(candidate_ratings) if candidate_ratings.size > 0 else 0.0
+            max_rating = np.max(candidate_ratings) if candidate_ratings.size > 0 else 1.0
+            if max_rating > min_rating:
+                rating_scores = (candidate_ratings - min_rating) / (max_rating - min_rating)
+            else:
+                rating_scores = np.full_like(candidate_ratings, 0.5)
+        logger.info(f"Shape of rating_scores (candidates): {rating_scores.shape}, Example values: {rating_scores[:5]}")
+
         # --- Combine Scores and Rank --- 
         final_scores = (
             self.content_weight * content_scores +
-            self.rating_weight * rating_scores +
             location_weight * proximity_scores +
             self.price_weight * price_scores
         )
+        michelin_mask = self.df.loc[final_candidate_indices, "is_michelin"].astype(bool).values
+        final_scores = final_scores - (michelin_mask * 0.25)
         logger.info(f"Shape of final_scores (candidates): {final_scores.shape}, Example values: {final_scores[:5]}")
-
-        # Get top N indices from the final candidates
-        # Need to sort based on the scores calculated for the candidates
-        top_indices_local = np.argsort(final_scores)[::-1][:top_n]
-        
-        # Map local indices back to global indices
+            
+        # randomize the order of candidates
+        np.random.seed(42)
+        np.random.shuffle(final_scores)
+        # select first n candidates
+        top_indices_local = np.argsort(final_scores)[-top_n:][::-1]
         top_indices_global = final_candidate_indices[top_indices_local]
-
+        
+        
         # --- Format Recommendations --- 
         recommendations = []
         for i, idx in enumerate(top_indices_global):
@@ -538,59 +550,6 @@ class RestaurantRecommender:
         logger.info(f"Top recommendations: {recommendations[:5] if recommendations else 'None'}")
         return recommendations, actual_radius
 
-    def evaluate(self, test_cases: List[Dict], top_n: int = 5) -> Dict[str, float]:
-        """
-        Evaluate the recommender on multiple test cases.
-        Each test case should be a dict with keys: 'liked_ids', 'disliked_ids', 'user_location', 'ground_truth_liked_ids'.
-        Returns average precision@top_n and recall@top_n over all cases.
-        """
-        precisions, recalls = [], []
-        logger.info(f"Evaluating recommender with {len(test_cases)} test cases at k={top_n}")
-        for i, case in enumerate(test_cases):
-            try:
-                recs, _ = self.recommend_restaurants(
-                    case.get('liked_ids', []), 
-                    case.get('disliked_ids', []),
-                    case['user_location'], 
-                    top_n=top_n
-                    # Add annoy_search_k if needed for evaluation consistency
-                    # annoy_search_k=500 
-                )
-                rec_ids = [r['business_id'] for r in recs]
-                true_ids = case.get('ground_truth_liked_ids', [])
-                
-                p_at_k = self.precision_at_k(rec_ids, true_ids, top_n)
-                r_at_k = self.recall_at_k(rec_ids, true_ids, top_n)
-                precisions.append(p_at_k)
-                recalls.append(r_at_k)
-                logger.info(f"Test case {i+1}: Precision@{top_n}={p_at_k:.4f}, Recall@{top_n}={r_at_k:.4f}")
-            except Exception as e:
-                logger.error(f"Error processing test case {i+1}: {e}", exc_info=True)
-                # Optionally append default values or skip the case
-                # precisions.append(0.0)
-                # recalls.append(0.0)
-
-        avg_precision = float(np.mean(precisions)) if precisions else 0.0
-        avg_recall = float(np.mean(recalls)) if recalls else 0.0
-        logger.info(f"Evaluation complete: Avg Precision@{top_n}={avg_precision:.4f}, Avg Recall@{top_n}={avg_recall:.4f}")
-        return {'precision_at_k': avg_precision, 'recall_at_k': avg_recall}
-
-    def precision_at_k(self, rec_ids: List[str], true_ids: List[str], k: int) -> float:
-        """Calculate precision@k for recommendations."""
-        if not rec_ids or not true_ids or k <= 0:
-            return 0.0
-        k = min(k, len(rec_ids))
-        relevant_recs = [r for r in rec_ids[:k] if r in true_ids]
-        return len(relevant_recs) / k if k > 0 else 0.0
-    
-    def recall_at_k(self, rec_ids: List[str], true_ids: List[str], k: int) -> float:
-        """Calculate recall@k for recommendations."""
-        if not rec_ids or not true_ids:
-            return 0.0
-        k = min(k, len(rec_ids))
-        relevant_recs = [r for r in rec_ids[:k] if r in true_ids]
-        return len(relevant_recs) / len(true_ids) if true_ids else 0.0
-    
     def get_attributes(self) -> Dict[str, List[str]]:
         """
         Get attributes for restaurant additions across all restaurants.

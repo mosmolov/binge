@@ -125,7 +125,7 @@ def update_model_with_new_restaurant(model: RestaurantRecommender, restaurant: R
     model._extract_features()
     
     # Rebuild Annoy index with updated embeddings
-    model._build_annoy_index(n_trees=1)
+    model._build_annoy_index(n_trees=50)
     
     
     print(f"Successfully updated recommendation model with new restaurant: {restaurant.name}")
