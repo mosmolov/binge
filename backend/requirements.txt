@@ -1,0 +1,16 @@
+fastapi
+beanie
+uvicorn[standard]
+pydantic
+numpy
+pandas
+python-jose[cryptography]
+passlib[bcrypt]
+python-dotenv
+scikit-learn
+sentence-transformers
+scipy
+annoy
+pymongo
+motor
+tqdm
