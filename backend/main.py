@@ -7,7 +7,6 @@ import uvicorn
 from backend.database import init_db
 from backend.routers.photos import router as photos_router
 from backend.routers.restaurants import router as restaurants_router
-from backend.routers.images import router as images_router
 from backend.routers.recommendations import router as recommendations_router, get_recommendation_model
 from backend.routers.auth import router as auth_router
 from backend.routers.users import router as users_router
