@@ -160,7 +160,8 @@ async def get_recommendations(
             disliked_ids=disliked_ids,
             user_location=user_location,
             radius_miles=request.radius_miles,
-            top_n=request.top_n
+            top_n=request.top_n,
+            desired_price=request.desired_price
             ),
         )
         
@@ -176,6 +177,7 @@ async def get_recommendations(
                     content_score=rec.get('content_score', 0.0),
                     rating_score=rec.get('rating_score', 0.0),
                     proximity_score=rec.get('proximity_score', 0.0),
+                    price_score=rec.get('price_score', 0.0),
                     final_score=rec.get('final_score', 0.0),
                     distance_miles=rec.get('distance_miles', 0.0)
                 )
@@ -335,6 +337,7 @@ async def get_user_recommendations(
     user_id: PydanticObjectId,
     model: RestaurantRecommender = Depends(get_recommendation_model),
     user_location: List[float] = Query(..., description="User's location as [latitude, longitude]"),
+    desired_price: Optional[int] = Query(None, ge=1, le=4, description="Desired price range (1-4, where 1 is cheapest and 4 is most expensive)"),
 ):
     """
     Get restaurant recommendations for a specific user.
@@ -349,7 +352,8 @@ async def get_user_recommendations(
             disliked_ids=user.disliked_business_ids,
             user_location=user_location,
             radius_miles=25.0,  # Default radius
-            top_n=25  # Default number of recommendations
+            top_n=25,  # Default number of recommendations
+            desired_price=desired_price
         )
         
         recommendations_raw, actual_radius = model.recommend_restaurants(request)
@@ -366,6 +370,7 @@ async def get_user_recommendations(
                     content_score=rec.get('content_score', 0.0),
                     rating_score=rec.get('rating_score', 0.0),
                     proximity_score=rec.get('proximity_score', 0.0),
+                    price_score=rec.get('price_score', 0.0),
                     final_score=rec.get('final_score', 0.0),
                     distance_miles=rec.get('distance_miles', 0.0)
                 )

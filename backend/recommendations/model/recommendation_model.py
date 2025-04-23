@@ -78,7 +78,6 @@ class RestaurantRecommender:
             # Re-index after potential row drops
             self.df = self.df.reset_index(drop=True)
             self.business_ids = self.df['business_id'].values
-
         # Load the embedding model
         logger.info(f"Loading embedding model: {embedding_model_name}")
         self.embedding_model = SentenceTransformer(embedding_model_name)
@@ -86,7 +85,6 @@ class RestaurantRecommender:
         # Generate the attribute embeddings and group similar attributes
         self._generate_attribute_name_embeddings()
         self._group_attributes_by_embedding(n_groups=50, linkage='average')
-        # Create restaurant embeddings directly (no caching)
         self._create_restaurant_embeddings(grouped=False)
 
         # Extract and prepare feature sets
@@ -186,12 +184,9 @@ class RestaurantRecommender:
         """Creates a dense embedding for each restaurant by averaging its attribute name embeddings."""
         logger.info("Creating dense restaurant embeddings from attribute names...")
         start_time = datetime.now()
-        if grouped and hasattr(self, 'grouped_attribute_columns'):
-            attribute_columns = self.grouped_attribute_columns
-            attribute_data = self.df_grouped_attributes[attribute_columns].values.astype(bool)
-        else:
-            attribute_columns = self.attribute_columns
-            attribute_data = self.df[attribute_columns].values.astype(bool)
+        
+        attribute_columns = self.attribute_columns
+        attribute_data = self.df[attribute_columns].values.astype(bool)
         num_restaurants = len(self.df)
         if not self.attribute_name_embeddings:
             logger.warning("No attribute name embeddings available. Content features will be empty.")
@@ -231,7 +226,7 @@ class RestaurantRecommender:
         # Geographic features (latitude, longitude)
         self.geo_features = self.df[['latitude', 'longitude']].values
         
-        # Star ratings
+        
         # Price features (RestaurantsPriceRange2)
         if 'RestaurantsPriceRange2' in self.df.columns:
             logger.info("Price range column found, processing...")
@@ -263,15 +258,11 @@ class RestaurantRecommender:
         """
         logger.info(f"Building Annoy index with {n_trees} trees for approximate content search")
         dim = self.restaurant_embeddings.shape[1]
-        self.annoy_regular = AnnoyIndex(dim, "angular")
-        self.annoy_michelin = AnnoyIndex(dim, "angular")
-        for i, emb in enumerate(self.restaurant_embeddings):
-            if self.df.at[i, "is_michelin"]:
-                self.annoy_michelin.add_item(i, emb.tolist())
-            else:
-                self.annoy_regular.add_item(i, emb.tolist())
-        self.annoy_regular.build(40)
-        self.annoy_michelin.build(10)
+        self.annoy = AnnoyIndex(dim, 'angular')
+        for i, embedding in enumerate(self.restaurant_embeddings):
+            self.annoy.add_item(i, embedding)
+        self.annoy.build(n_trees)
+        logger.info(f"Annoy index built with {len(self.restaurant_embeddings)} items")
 
     def set_weights(self, content_weight: float = 1.0):
         """
@@ -337,8 +328,8 @@ class RestaurantRecommender:
         default_radius_miles: float = 25.0,
         min_recommendations: int = 5,
         location_weight: float = 10.0,
-        top_n: int = 5,
-        annoy_search_k: int = 1000, # Number of candidates to retrieve from Annoy
+        top_n: int = 100,
+        annoy_search_k: int = 2000, # Number of candidates to retrieve from Annoy
         location_search_k: int = 1000 # Number of closest candidates to consider by location
     ) -> Tuple[List[Dict], float]:
         """
@@ -378,14 +369,13 @@ class RestaurantRecommender:
             liked_embs = self.content_features[liked_indices]
             avg_liked_emb = np.mean(liked_embs, axis=0)
             
-            # Find nearest neighbors using both Annoy indices
-            reg_inds, _ = self.annoy_regular.get_nns_by_vector(
-                avg_liked_emb, annoy_search_k, include_distances=True
+            annoy_candidate_indices = self.annoy.get_nns_by_vector(
+                avg_liked_emb, 
+                annoy_search_k, 
+                include_distances=False
             )
-            mic_inds, _ = self.annoy_michelin.get_nns_by_vector(
-                avg_liked_emb, annoy_search_k, include_distances=True
-            )
-            annoy_candidate_indices = np.union1d(reg_inds, mic_inds)
+            # Filter out disliked indices from the candidates
+            annoy_candidate_indices = [idx for idx in annoy_candidate_indices if idx not in disliked_indices]
             logger.info(f"Retrieved {len(annoy_candidate_indices)} candidates from Annoy indices based on liked items.")
         else:
              logger.info("No liked items provided, skipping Annoy search.")
@@ -430,23 +420,10 @@ class RestaurantRecommender:
                  actual_radius = 0
 
         # Apply the radius mask to the original candidate_indices
-        filtered_indices_global = candidate_indices[in_radius_mask]
-        if len(filtered_indices_global) == 0:
-            logger.warning("No candidates found after distance filtering. Returning empty list.")
-            return [], actual_radius
-
-        # 2. Filter out already rated restaurants
-        already_rated_mask = np.array([self.business_ids[idx] in liked_set or self.business_ids[idx] in disliked_set 
-                                       for idx in filtered_indices_global])
+        final_candidate_indices = candidate_indices[in_radius_mask]
         
-        final_candidate_indices = filtered_indices_global[~already_rated_mask]
-        if len(final_candidate_indices) == 0:
-            logger.warning("No candidates left after removing already rated items. Returning empty list.")
-            return [], actual_radius
         
         logger.info(f"Filtered down to {len(final_candidate_indices)} final candidates.")
-
-        # --- Score Calculation for Final Candidates --- 
         
         # Get features only for the final candidates
         candidate_content_features = self.content_features[final_candidate_indices]
@@ -465,7 +442,7 @@ class RestaurantRecommender:
         else:
             sim_disliked = np.zeros(len(final_candidate_indices))
             
-        content_scores = sim_liked - sim_disliked
+        content_scores = sim_liked - sim_disliked * 0.05
         logger.info(f"Shape of content_scores (candidates): {content_scores.shape}, Example values: {content_scores[:5]}")
         
 
@@ -474,15 +451,50 @@ class RestaurantRecommender:
         proximity_scores = 1 - (candidate_distances / actual_radius) if actual_radius > 0 else np.ones_like(candidate_distances)
         logger.info(f"Shape of proximity_scores (candidates): {proximity_scores.shape}, Example values: {proximity_scores[:5]}")
 
-        # 4. Price Scores
+        # 4. Price Scores and Filtering
         candidate_price_scaled = self.price_features_scaled[final_candidate_indices]
-        if liked_indices:
+        
+        # Get raw prices (not scaled) for user-specified price preference
+        if 'RestaurantsPriceRange2' in self.df.columns:
+            candidate_prices_raw = pd.to_numeric(self.df.loc[final_candidate_indices, 'RestaurantsPriceRange2'], errors='coerce').fillna(2).values
+        else:
+            candidate_prices_raw = np.ones(len(final_candidate_indices)) * 2  # Default to middle price
+
+        # If user has specified a desired price, filter to only include exact matches
+        if request.desired_price is not None:
+            logger.info(f"Filtering candidates by exact price match: {request.desired_price}")
+            # Create a mask for exact price matches
+            price_match_mask = np.isclose(candidate_prices_raw, request.desired_price)
+            
+            # If we have exact matches, filter all arrays to only include those matches
+            if np.any(price_match_mask):
+                final_candidate_indices = final_candidate_indices[price_match_mask]
+                candidate_content_features = candidate_content_features[price_match_mask]
+                candidate_distances = candidate_distances[price_match_mask]
+                proximity_scores = proximity_scores[price_match_mask]
+                candidate_price_scaled = candidate_price_scaled[price_match_mask]
+                candidate_prices_raw = candidate_prices_raw[price_match_mask]
+                content_scores = content_scores[price_match_mask]
+                
+                logger.info(f"Filtered down to {len(final_candidate_indices)} candidates with exact price match {request.desired_price}")
+                # All remaining candidates have the exact price, so give them perfect price scores
+                price_scores = np.ones(len(final_candidate_indices))
+            else:
+                logger.warning(f"No candidates found with exact price match {request.desired_price}. Falling back to price similarity scoring.")
+                # Calculate difference between restaurant price and user's desired price
+                price_diff = np.abs(candidate_prices_raw - request.desired_price)
+                # Normalize to [0,1] range where 1 is perfect match and 0 is worst match
+                max_possible_diff = 3.0  # Max difference between price level 1 and 4
+                price_scores = 1.0 - (price_diff / max_possible_diff)
+        elif liked_indices:
+            logger.info("No Desired price, using liked restaurants' average price")
+            # Fall back to using liked restaurants' average price
             avg_liked_price = np.mean(self.price_features_scaled[liked_indices])
             price_diff = np.abs(candidate_price_scaled - avg_liked_price)
             max_price_diff = np.max(price_diff) if price_diff.size > 0 else 1.0
             price_scores = 1 - (price_diff / max_price_diff) if max_price_diff > 0 else np.ones_like(price_diff)
         else:
-            # Normalize by range if no liked items
+            # Normalize by range if no liked items or desired price
             min_price = np.min(candidate_price_scaled)
             max_price = np.max(candidate_price_scaled)
             if max_price > min_price:
@@ -491,39 +503,34 @@ class RestaurantRecommender:
                 price_scores = np.full_like(candidate_price_scaled, 0.5)
         logger.info(f"Shape of price_scores (candidates): {price_scores.shape}, Example values: {price_scores[:5]}")
 
-        # Rating Scores based on restaurant star ratings
-        candidate_ratings = self.df.loc[final_candidate_indices, 'stars'].values.astype(float)
-        if liked_indices:
-            avg_liked_rating = np.mean(self.df.loc[liked_indices, 'stars'].values.astype(float))
-            rating_diff = np.abs(candidate_ratings - avg_liked_rating)
-            max_rating_diff = np.max(rating_diff) if rating_diff.size > 0 else 1.0
-            rating_scores = 1 - (rating_diff / max_rating_diff) if max_rating_diff > 0 else np.ones_like(rating_diff)
-        else:
-            min_rating = np.min(candidate_ratings) if candidate_ratings.size > 0 else 0.0
-            max_rating = np.max(candidate_ratings) if candidate_ratings.size > 0 else 1.0
-            if max_rating > min_rating:
-                rating_scores = (candidate_ratings - min_rating) / (max_rating - min_rating)
-            else:
-                rating_scores = np.full_like(candidate_ratings, 0.5)
-        logger.info(f"Shape of rating_scores (candidates): {rating_scores.shape}, Example values: {rating_scores[:5]}")
-
-        # --- Combine Scores and Rank --- 
-        final_scores = (
-            self.content_weight * content_scores +
-            location_weight * proximity_scores +
-            self.price_weight * price_scores
-        )
-        michelin_mask = self.df.loc[final_candidate_indices, "is_michelin"].astype(bool).values
-        final_scores = final_scores - (michelin_mask * 0.25)
-        logger.info(f"Shape of final_scores (candidates): {final_scores.shape}, Example values: {final_scores[:5]}")
-            
-        # randomize the order of candidates
-        np.random.seed(42)
-        np.random.shuffle(final_scores)
-        # select first n candidates
-        top_indices_local = np.argsort(final_scores)[-top_n:][::-1]
-        top_indices_global = final_candidate_indices[top_indices_local]
         
+
+        michelin_penalty = 0.3      # tune 0-1
+        is_michelin_flag = self.df['is_michelin'].values[final_candidate_indices]
+        final_scores = (
+            self.content_weight * content_scores
+            + location_weight       * proximity_scores
+            + self.price_weight     * price_scores
+            - michelin_penalty      * is_michelin_flag   # subtract if Michelin
+        )
+
+        logger.info(f"Shape of final_scores (candidates): {final_scores.shape}, Example values: {final_scores[:5]}")
+        
+        # select first n candidates
+        top_indices_local = np.argsort(final_scores)[::-1]
+        top_indices_global = final_candidate_indices[top_indices_local]
+
+        if self.df.loc[top_indices_global, "is_michelin"].all():
+            non_mich = [i for i in final_candidate_indices
+                        if not self.df.at[i, "is_michelin"]]
+            if non_mich:
+                # pick the highest-scoring non-Michelin
+                best_non = max(non_mich,
+                            key=lambda i: final_scores[
+                                np.where(final_candidate_indices == i)[0][0]])
+                # put it in the last slot
+                top_indices_global[-1] = best_non
+
         
         # --- Format Recommendations --- 
         recommendations = []
@@ -534,15 +541,12 @@ class RestaurantRecommender:
                 'business_id': restaurant_id,
                 'distance_miles': float(candidate_distances[local_idx]),
                 'content_score': float(content_scores[local_idx]),
-                'rating_score': float(rating_scores[local_idx]),
                 'proximity_score': float(proximity_scores[local_idx]),
                 'price_score': float(price_scores[local_idx]),
                 'final_score': float(final_scores[local_idx])
             }
             if 'name' in self.df.columns:
                 recommendation['name'] = self.df.iloc[idx]['name']
-            if 'stars' in self.df.columns:
-                recommendation['stars'] = float(self.df.iloc[idx]['stars'])
             recommendations.append(recommendation)
             
         duration = (datetime.now() - start_time).total_seconds()

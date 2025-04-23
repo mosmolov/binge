@@ -15,6 +15,11 @@ import {
   Container,
   Stack,
   Slider,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Divider,
 } from "@mui/material";
 import { keyframes } from "@emotion/react";
 import ThumbUpAltIcon from "@mui/icons-material/ThumbUpAlt";
@@ -47,6 +52,7 @@ export default function SwipeImageUI() {
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
   const [locationAcquired, setLocationAcquired] = useState(false); // Track if location is acquired
   const [radius, setRadius] = useState(10); // Recommendation radius in miles
+  const [pricePreference, setPricePreference] = useState(""); // Price preference state
 
   const { logout, user } = useAuth();
   const navigate = useNavigate();
@@ -185,7 +191,8 @@ export default function SwipeImageUI() {
         disliked_ids: disliked_ids,
         user_location: [userLatitude, userLongitude],
         radius_miles: radius, // Use selected recommendation radius
-        top_n: 5,
+        top_n: 100,
+        desired_price: pricePreference || undefined // Include price preference if selected
       };
 
       // Call recommendation endpoint
@@ -356,6 +363,25 @@ export default function SwipeImageUI() {
                 step={1}
                 valueLabelDisplay="auto"
               />
+            </Box>
+
+            {/* Price preference selector */}
+            <Box sx={{ width: '100%', maxWidth: 400, mb: 2 }}>
+              <FormControl fullWidth>
+                <InputLabel id="price-preference-label">Price Preference</InputLabel>
+                <Select
+                  labelId="price-preference-label"
+                  value={pricePreference}
+                  onChange={(e) => setPricePreference(e.target.value)}
+                  label="Price Preference"
+                >
+                  <MenuItem value=""><em>None</em></MenuItem>
+                  <MenuItem value={1}>$ (Budget)</MenuItem>
+                  <MenuItem value={2}>$$ (Moderate)</MenuItem>
+                  <MenuItem value={3}>$$$ (Expensive)</MenuItem>
+                  <MenuItem value={4}>$$$$ (Very Expensive)</MenuItem>
+                </Select>
+              </FormControl>
             </Box>
 
             {loading && <CircularProgress sx={{ my: 4 }} />}
